@@ -141,6 +141,22 @@ body {
   margin-left: 2px;
 }
 
+.hud-buff {
+  max-width: 240px;
+  margin-top: 8px;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  line-height: 1.7;
+  color: #7df9ff;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  white-space: normal;
+}
+
+.hud-buff.show {
+  opacity: 1;
+}
+
 /* ---------- 操作提示 ---------- */
 #hint {
   position: fixed;

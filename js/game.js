@@ -24,6 +24,7 @@
   const elSceneFlash = document.getElementById('sceneFlash');
   const elEnding = document.getElementById('ending');
   const elEndingRestart = document.getElementById('endingRestart');
+  const elBuff = document.getElementById('buffState');
 
   // Web Audio：全部音效由 OscillatorNode 实时合成（见 js/audio.js）
   const sfx = window.GameAudio || {
@@ -51,7 +52,9 @@
   const JUMP_BUFFER_TIME = 0.12;
   const CAMERA_EASE = 14;
 
-  const DELAY_STEPS = 120;            // 2 秒 × 60Hz 的环形队列长度
+  const SHADOW_DELAY_NORMAL = 120;    // 2 秒 × 60Hz
+  const SHADOW_DELAY_AMNESIA = 240;   // 4 秒 × 60Hz
+  const RING_CAPACITY = SHADOW_DELAY_AMNESIA + 1;
   const SHADOW_GRACE = 0.6;           // 影子成形动画期间不判定伤害
   const SHOT_INTERVAL = 1.5;          // 影子开火间隔
   const BULLET_SPEED = 780;
@@ -151,6 +154,33 @@
   ];
 
   // ============================================================
+  // 心理防御机制（增益）
+  // ============================================================
+  const BUFFS = {
+    amnesia: {
+      name: '选择性失忆',
+      text: '时间会冲淡一切',
+      color: '#6fe9ff',
+      rgb: '111, 233, 255',
+      duration: 10,
+    },
+    aq: {
+      name: '阿Q精神',
+      text: '错的不是我，是这个世界',
+      color: '#ffd166',
+      rgb: '255, 209, 102',
+      duration: 2,
+    },
+    sprint: {
+      name: '猛猛冲刺',
+      text: '只要跑得够快，悲伤就追不上我',
+      color: '#ff7ab6',
+      rgb: '255, 122, 182',
+      duration: 3,
+    },
+  };
+
+  // ============================================================
   // 配色（纯代码绘制）
   // ============================================================
   const PLAYER_PALETTE = {
@@ -235,6 +265,9 @@
     slowTimer: 0,
     reverseTimer: 0,
     stunCooldown: 0,
+    amnesiaTimer: 0,
+    invincibleTimer: 0,
+    sprintTimer: 0,
   };
 
   const game = {
@@ -253,6 +286,8 @@
   const bg = { motes: [] };
   const statics = [];
   const dynamics = [];
+  const pickups = [];
+  const rings = [];
   const quotes = [];
   const toasts = [];
 
@@ -261,10 +296,12 @@
   let quoteTimer = 0.8;
   let dynamicTimer = 3.2;
   let potTimer = 6.5;
+  let buffHudText = '';
 
-  // 环形队列：每个槽存放一次固定步长的玩家快照
-  const shadowRing = new Array(DELAY_STEPS).fill(null);
+  // 环形队列：容量覆盖 4 秒延迟，正常读取 2 秒前，失忆时读取 4 秒前
+  const shadowRing = new Array(RING_CAPACITY).fill(null);
   let shadowWrite = 0;
+  let lastShadowDelay = SHADOW_DELAY_NORMAL;
   let shadowPose = null;
   let shadowPrevPose = null;
   let fireTimer = SHOT_INTERVAL;
@@ -422,12 +459,16 @@
     player.slowTimer = 0;
     player.reverseTimer = 0;
     player.stunCooldown = 0;
+    player.amnesiaTimer = 0;
+    player.invincibleTimer = 0;
+    player.sprintTimer = 0;
 
     camera.x = 0;
     camera.prevX = 0;
 
     shadowRing.fill(null);
     shadowWrite = 0;
+    lastShadowDelay = SHADOW_DELAY_NORMAL;
     shadowPose = null;
     shadowPrevPose = null;
     fireTimer = SHOT_INTERVAL;
@@ -437,6 +478,8 @@
     particles.length = 0;
     statics.length = 0;
     dynamics.length = 0;
+    pickups.length = 0;
+    rings.length = 0;
     quotes.length = 0;
     toasts.length = 0;
     dustAccumulator = 0;
@@ -446,6 +489,7 @@
     potTimer = 8.0;
 
     buildSceneObstacles();
+    buildPickups();
 
     game.phase = showIntro ? 'intro' : 'running';
     game.hp = MAX_HP;
@@ -456,8 +500,10 @@
     game.edgeFlash = 0;
 
     hudPercent = -1;
+    buffHudText = null;
     updateHud();
     updateHp();
+    updateBuffHud();
 
     elSceneLabel.textContent = scene.act + ' · ' + scene.name;
     elDeathScene.textContent = scene.act + ' · ' + scene.name;
@@ -520,6 +566,9 @@
     player.slowTimer = Math.max(0, player.slowTimer - dt);
     player.reverseTimer = Math.max(0, player.reverseTimer - dt);
     player.stunCooldown = Math.max(0, player.stunCooldown - dt);
+    player.amnesiaTimer = Math.max(0, player.amnesiaTimer - dt);
+    player.invincibleTimer = Math.max(0, player.invincibleTimer - dt);
+    player.sprintTimer = Math.max(0, player.sprintTimer - dt);
 
     // ---------- 水平移动 ----------
     let dir = 0;
@@ -530,8 +579,9 @@
     if (player.reverseTimer > 0) dir = -dir;
 
     const slowed = player.slowTimer > 0;
-    const accel = slowed ? RUN_ACCEL * 0.5 : RUN_ACCEL;
-    const maxSpeed = slowed ? RUN_MAX * 0.38 : RUN_MAX;
+    const sprinting = player.sprintTimer > 0;
+    const accel = (slowed ? RUN_ACCEL * 0.5 : RUN_ACCEL) * (sprinting ? 1.8 : 1);
+    const maxSpeed = (slowed ? RUN_MAX * 0.38 : RUN_MAX) * (sprinting ? 1.5 : 1);
 
     if (dir !== 0) {
       player.vx += dir * accel * dt;
@@ -612,6 +662,10 @@
       return;
     }
 
+    // ---------- 增益拾取 ----------
+    updatePickups();
+    updateRings(dt);
+
     // ---------- 场景障碍 ----------
     updateSceneHazards(dt);
     if (game.phase !== 'running') return;
@@ -620,11 +674,18 @@
     const camTarget = Math.max(0, player.worldX - camera.anchor);
     camera.x += (camTarget - camera.x) * Math.min(1, dt * CAMERA_EASE);
 
-    // ---------- 环形队列：取出 2 秒前的快照，写入当前快照 ----------
-    shadowPrevPose = shadowPose;
-    shadowPose = shadowRing[shadowWrite];
+    // ---------- 环形队列：按当前延迟读取快照 ----------
+    const shadowDelay = player.amnesiaTimer > 0
+      ? SHADOW_DELAY_AMNESIA
+      : SHADOW_DELAY_NORMAL;
+    const readIndex = (shadowWrite - shadowDelay + RING_CAPACITY) % RING_CAPACITY;
+
+    // 延迟突变时不做插值，避免影子被拉成一条长线
+    shadowPrevPose = shadowDelay !== lastShadowDelay ? null : shadowPose;
+    lastShadowDelay = shadowDelay;
+    shadowPose = shadowRing[readIndex];
     shadowRing[shadowWrite] = capturePose();
-    shadowWrite = (shadowWrite + 1) % DELAY_STEPS;
+    shadowWrite = (shadowWrite + 1) % RING_CAPACITY;
 
     if (shadowPose) {
       game.shadowAge += dt;
@@ -679,6 +740,7 @@
     game.edgeFlash = Math.max(0, game.edgeFlash - dt * 1.6);
 
     updateHud();
+    updateBuffHud();
   }
 
   function updateAmbient(dt) {
@@ -844,6 +906,7 @@
 
   function die(cause) {
     if (game.phase !== 'running') return;
+    if (player.invincibleTimer > 0) return;
 
     game.phase = 'dead';
     game.hp = 0;
@@ -938,6 +1001,131 @@
       y: player.y,
       crouchBlend: player.crouchBlend,
     });
+  }
+
+  // ---------- 每幕随机摆放心理防御方块 ----------
+  function buildPickups() {
+    pickups.length = 0;
+
+    const types = ['amnesia', 'aq', 'sprint'];
+    const offset = Math.floor(hash(sceneIndex * 19.7) * 3);
+    const slots = [3600, 7400, 11200, 15000, 18800];
+
+    for (let i = 0; i < slots.length; i++) {
+      let x = slots[i] + hash(sceneIndex * 7.1 + i * 3.3) * 650;
+
+      // 避开大型空中机关
+      for (const o of statics) {
+        if ((o.kind === 'pendulum' || o.kind === 'spotlight') &&
+            Math.abs(o.worldX - x) < 300) {
+          x += 480;
+          break;
+        }
+      }
+
+      // 避开地面障碍
+      for (const o of statics) {
+        if ((o.kind === 'paper' || o.kind === 'heart' || o.kind === 'coffee') &&
+            Math.abs(o.worldX - x) < 150) {
+          x += 220;
+          break;
+        }
+      }
+
+      x = Math.min(x, SCENE_LENGTH - 1200);
+
+      pickups.push({
+        worldX: x,
+        height: i % 2 === 0 ? 58 : 132,
+        type: types[(i + offset) % types.length],
+        seed: hash(sceneIndex * 5.9 + i * 1.7) * 6.28,
+      });
+    }
+  }
+
+  function updatePickups() {
+    const bodyCenter = player.y + 46;
+
+    for (let i = pickups.length - 1; i >= 0; i--) {
+      const p = pickups[i];
+      if (Math.abs(player.worldX - p.worldX) > 36) continue;
+      if (Math.abs(bodyCenter - p.height) > 54) continue;
+
+      const buff = BUFFS[p.type];
+      const x = p.worldX;
+      const height = p.height;
+
+      pickups.splice(i, 1);
+      activateBuff(p.type);
+
+      rings.push({
+        worldX: x,
+        height,
+        life: 0.65,
+        maxLife: 0.65,
+        color: buff.color,
+      });
+
+      spawnBurst(
+        x,
+        height,
+        p.type === 'aq' ? 'gold' : p.type === 'sprint' ? 'pink' : 'cyan',
+        20,
+        1.2
+      );
+    }
+  }
+
+  function updateRings(dt) {
+    for (let i = rings.length - 1; i >= 0; i--) {
+      rings[i].life -= dt;
+      if (rings[i].life <= 0) rings.splice(i, 1);
+    }
+  }
+
+  function activateBuff(type) {
+    const buff = BUFFS[type];
+    if (!buff) return;
+
+    if (type === 'amnesia') {
+      player.amnesiaTimer = Math.max(player.amnesiaTimer, buff.duration);
+    } else if (type === 'aq') {
+      player.invincibleTimer = Math.max(player.invincibleTimer, buff.duration);
+      player.slowTimer = 0;
+      player.reverseTimer = 0;
+    } else if (type === 'sprint') {
+      player.sprintTimer = Math.max(player.sprintTimer, buff.duration);
+      player.slowTimer = 0;
+    }
+
+    addToast('【' + buff.name + '】' + buff.text, buff.color, 18, 2.4);
+    sfx.pickup();
+    updateBuffHud();
+  }
+
+  function updateBuffHud() {
+    const bits = [];
+    let color = BUFFS.amnesia.color;
+
+    if (player.amnesiaTimer > 0) {
+      bits.push('选择性失忆 ' + Math.ceil(player.amnesiaTimer) + 's');
+    }
+    if (player.sprintTimer > 0) {
+      bits.push('猛猛冲刺 ' + Math.ceil(player.sprintTimer) + 's');
+      color = BUFFS.sprint.color;
+    }
+    if (player.invincibleTimer > 0) {
+      bits.push('阿Q精神 ' + Math.ceil(player.invincibleTimer) + 's');
+      color = BUFFS.aq.color;
+    }
+
+    const text = bits.join(' · ');
+    if (text === buffHudText || !elBuff) return;
+
+    buffHudText = text;
+    elBuff.textContent = text;
+    elBuff.style.color = color;
+    elBuff.classList.toggle('show', !!text);
   }
 
   function updateSceneHazards(dt) {
@@ -1101,6 +1289,7 @@
 
   // ---------- 负面状态 ----------
   function applySlow(seconds, text) {
+    if (player.invincibleTimer > 0) return;
     player.slowTimer = Math.max(player.slowTimer, seconds);
     player.vx *= 0.24;
     player.squash = 0.82;
@@ -1109,6 +1298,7 @@
   }
 
   function slipPlayer(text) {
+    if (player.invincibleTimer > 0) return;
     player.vx = 0;
     player.slowTimer = Math.max(player.slowTimer, 1.2);
     player.squash = 0.7;
@@ -1117,6 +1307,7 @@
   }
 
   function stunPlayer() {
+    if (player.invincibleTimer > 0) return;
     player.reverseTimer = 1.8;
     player.stunCooldown = 2.8;
     player.vx *= 0.28;
@@ -1125,6 +1316,7 @@
   }
 
   function pushBackPlayer(amount, text) {
+    if (player.invincibleTimer > 0) return;
     player.worldX = Math.max(player.startX, player.worldX - amount);
     player.vx = Math.min(0, player.vx) * 0.3;
     player.runPhase += 1.4;
@@ -1149,16 +1341,18 @@
   }
 
   // ---------- 屏幕飘字 ----------
-  function addToast(text) {
+  function addToast(text, color, size, life) {
     const sx = clamp(player.worldX - camera.x, 100, view.w - 100);
+    const duration = life || 1.5;
+
     toasts.push({
       text,
       x: sx,
       y: world.groundY - 185,
-      life: 1.5,
-      maxLife: 1.5,
-      color: scene.accent,
-      size: 16,
+      life: duration,
+      maxLife: duration,
+      color: color || scene.accent,
+      size: size || 16,
     });
   }
 
@@ -1306,11 +1500,13 @@
     drawQuotes();
     drawGoal(camX);
     drawStatics(camX);
+    drawPickups(camX);
     drawShadow(alpha, camX);
     drawParticles(camX);
     drawSpeedStreaks(camX);
     drawPlayer(alpha, camX);
     drawDynamics(camX);
+    drawRings(camX);
     drawBullets(camX);
     drawEdgeWarning(camX);
 
@@ -2527,6 +2723,186 @@
     ctx.restore();
   }
 
+  // ============================================================
+  // 心理防御方块绘制
+  // ============================================================
+  function drawPickups(camX) {
+    for (const p of pickups) {
+      const x = p.worldX - camX;
+      if (x < -110 || x > view.w + 110) continue;
+
+      const buff = BUFFS[p.type];
+      const bob = Math.sin(elapsed * 2.2 + p.seed) * 6;
+      const y = world.groundY - p.height + bob;
+
+      // 垂直光柱
+      const beamTop = y - 36;
+      const beam = ctx.createLinearGradient(0, world.groundY, 0, beamTop);
+      beam.addColorStop(0, 'rgba(' + buff.rgb + ', 0)');
+      beam.addColorStop(0.75, 'rgba(' + buff.rgb + ', 0.03)');
+      beam.addColorStop(1, 'rgba(' + buff.rgb + ', 0.1)');
+      ctx.fillStyle = beam;
+      ctx.fillRect(x - 24, beamTop, 48, world.groundY - beamTop);
+
+      // 光晕
+      const aura = ctx.createRadialGradient(x, y, 2, x, y, 52);
+      aura.addColorStop(0, 'rgba(' + buff.rgb + ', 0.3)');
+      aura.addColorStop(1, 'rgba(' + buff.rgb + ', 0)');
+      ctx.fillStyle = aura;
+      ctx.beginPath();
+      ctx.arc(x, y, 52, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 旋转轨道
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(elapsed * 1.1 + p.seed);
+      ctx.strokeStyle = 'rgba(' + buff.rgb + ', 0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 33, 11, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      // 等距发光方块
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.shadowColor = buff.color;
+      ctx.shadowBlur = 20;
+
+      ctx.beginPath();
+      ctx.moveTo(0, -24);
+      ctx.lineTo(18, -13);
+      ctx.lineTo(0, -2);
+      ctx.lineTo(-18, -13);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(' + buff.rgb + ', 0.9)';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(-18, -13);
+      ctx.lineTo(0, -2);
+      ctx.lineTo(0, 22);
+      ctx.lineTo(-18, 11);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(' + buff.rgb + ', 0.42)';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(18, -13);
+      ctx.lineTo(0, -2);
+      ctx.lineTo(0, 22);
+      ctx.lineTo(18, 11);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(' + buff.rgb + ', 0.2)';
+      ctx.fill();
+
+      // 棱边
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, -24);
+      ctx.lineTo(18, -13);
+      ctx.lineTo(0, -2);
+      ctx.lineTo(-18, -13);
+      ctx.closePath();
+      ctx.moveTo(0, -2);
+      ctx.lineTo(0, 22);
+      ctx.moveTo(-18, -13);
+      ctx.lineTo(-18, 11);
+      ctx.lineTo(0, 22);
+      ctx.lineTo(18, 11);
+      ctx.lineTo(18, -13);
+      ctx.stroke();
+
+      drawBuffGlyph(p.type);
+      ctx.restore();
+
+      // 环绕火星
+      for (let i = 0; i < 3; i++) {
+        const a = elapsed * 1.7 + p.seed + i * (Math.PI * 2 / 3);
+        const px = x + Math.cos(a) * 30;
+        const py = y + Math.sin(a) * 14;
+        ctx.globalAlpha = 0.4;
+        ctx.fillStyle = buff.color;
+        ctx.fillRect(px, py, 2, 2);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawBuffGlyph(type) {
+    ctx.save();
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+
+    if (type === 'amnesia') {
+      ctx.beginPath();
+      ctx.moveTo(-7, -10);
+      ctx.lineTo(7, -10);
+      ctx.lineTo(0, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-7, 10);
+      ctx.lineTo(7, 10);
+      ctx.lineTo(0, 0);
+      ctx.closePath();
+      ctx.fill();
+    } else if (type === 'aq') {
+      ctx.beginPath();
+      ctx.moveTo(0, -11);
+      ctx.lineTo(9, -6);
+      ctx.lineTo(8, 3);
+      ctx.lineTo(0, 11);
+      ctx.lineTo(-8, 3);
+      ctx.lineTo(-9, -6);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, -5);
+      ctx.lineTo(0, 5);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(2, -12);
+      ctx.lineTo(-7, 1);
+      ctx.lineTo(-1, 1);
+      ctx.lineTo(-3, 12);
+      ctx.lineTo(8, -2);
+      ctx.lineTo(2, -2);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  function drawRings(camX) {
+    for (const r of rings) {
+      const t = 1 - r.life / r.maxLife;
+      const x = r.worldX - camX;
+      const y = world.groundY - r.height;
+
+      ctx.save();
+      ctx.globalAlpha = (1 - t) * 0.8;
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = r.color;
+      ctx.shadowBlur = 16;
+      ctx.beginPath();
+      ctx.arc(x, y, 18 + t * 76, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+  }
+
   function drawDynamics(camX) {
     for (const d of dynamics) {
       const x = d.worldX - camX;
@@ -2770,7 +3146,54 @@
     const screenX = pose.worldX - camX;
 
     drawPlayerShadow(screenX, pose.y);
+
+    // 猛猛冲刺：青色残影
+    if (player.sprintTimer > 0) {
+      const behind = -player.facing;
+      ctx.save();
+      ctx.globalAlpha = 0.14;
+      drawFigureAt(pose, PLAYER_PALETTE, screenX + behind * 16);
+      ctx.globalAlpha = 0.07;
+      drawFigureAt(pose, PLAYER_PALETTE, screenX + behind * 32);
+      ctx.restore();
+    }
+
     drawFigureAt(pose, PLAYER_PALETTE, screenX);
+
+    // 阿Q精神：金色护盾
+    if (player.invincibleTimer > 0) {
+      drawPlayerShield(screenX, world.groundY - pose.y);
+    }
+  }
+
+  function drawPlayerShield(screenX, feetY) {
+    const pulse = 0.5 + 0.5 * Math.sin(elapsed * 9);
+    const cy = feetY - 52;
+
+    ctx.save();
+    ctx.translate(screenX, cy);
+    ctx.strokeStyle = BUFFS.aq.color;
+    ctx.shadowColor = BUFFS.aq.color;
+    ctx.shadowBlur = 18;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.32 + 0.3 * pulse;
+    ctx.beginPath();
+    ctx.arc(0, 0, 52 + pulse * 4, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.14 + 0.1 * pulse;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + (i * Math.PI) / 3;
+      const px = Math.cos(a) * 60;
+      const py = Math.sin(a) * 60;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
   }
 
   function drawPlayerShadow(screenX, height) {
