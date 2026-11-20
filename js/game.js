@@ -15,6 +15,15 @@
   const elDeathSub = document.getElementById('deathSub');
   const elDeathProgress = document.getElementById('deathProgress');
   const elRestart = document.getElementById('restartBtn');
+  const elSceneLabel = document.getElementById('sceneLabel');
+  const elDeathScene = document.getElementById('deathScene');
+  const elSceneCard = document.getElementById('sceneCard');
+  const elSceneAct = document.getElementById('sceneAct');
+  const elSceneName = document.getElementById('sceneName');
+  const elSceneMood = document.getElementById('sceneMood');
+  const elSceneFlash = document.getElementById('sceneFlash');
+  const elEnding = document.getElementById('ending');
+  const elEndingRestart = document.getElementById('endingRestart');
 
   // Web Audio：全部音效由 OscillatorNode 实时合成（见 js/audio.js）
   const sfx = window.GameAudio || {
@@ -30,7 +39,8 @@
   // ============================================================
   const STEP_MS = 1000 / 60;          // 固定 60Hz 逻辑步长
   const MAX_STEPS = 5;                // 单帧最多补算步数
-  const TRACK_LENGTH = 6000;          // 测试跑道长度（世界单位）
+  const SCENE_LENGTH = 22000;         // 每幕约 55~60 秒（世界单位）
+  const SCENE_INTRO_TIME = 2.4;       // 场景标题卡停留时间
 
   const GRAVITY = 2700;
   const JUMP_SPEED = 920;
@@ -61,6 +71,84 @@
   const KEY_RIGHT = new Set(['ArrowRight', 'KeyD']);
   const KEY_JUMP = new Set(['Space', 'ArrowUp', 'KeyW']);
   const KEY_DOWN = new Set(['ArrowDown', 'KeyS']);
+
+  // ============================================================
+  // 三幕“后悔时刻”
+  // ============================================================
+  const SCENES = [
+    {
+      key: 'exam',
+      act: '第一幕',
+      actLabel: '第一幕 / 共三幕',
+      name: '高考考场',
+      mood: '焦虑 · 时间压迫',
+      accent: '#ff394f',
+      accentRgb: '255, 57, 79',
+      sky: ['#040508', '#0b0c10', '#1c1e23', '#05060a'],
+      fog: 'rgba(210, 220, 230, 0.13)',
+      mote: '#dbe7ef',
+      ground: '#0e0f13',
+      groundLight: 'rgba(220, 228, 238, 0.15)',
+      quotes: [
+        '没涂答题卡',
+        '那道大题选错了',
+        '还有五分钟收卷',
+        '答题卡漏了一面',
+        '这道题讲过无数遍',
+        '复读一年吧',
+        '又改错了',
+        '时间不够了',
+      ],
+    },
+    {
+      key: 'confession',
+      act: '第二幕',
+      actLabel: '第二幕 / 共三幕',
+      name: '尴尬表白现场',
+      mood: '社死 · 被注视',
+      accent: '#ff4f8b',
+      accentRgb: '255, 79, 139',
+      sky: ['#0b020a', '#1d0619', '#3a0b28', '#0d0209'],
+      fog: 'rgba(255, 90, 150, 0.13)',
+      mote: '#ffb3cd',
+      ground: '#140611',
+      groundLight: 'rgba(255, 110, 160, 0.2)',
+      quotes: [
+        '她拒绝了你',
+        '全场都在笑',
+        '手机在录像',
+        'ta只当你是朋友',
+        '别自作多情',
+        '所有人都在看你',
+        '玫瑰掉了一地',
+        '快逃',
+      ],
+    },
+    {
+      key: 'office',
+      act: '第三幕',
+      actLabel: '第三幕 / 共三幕',
+      name: '深夜的职场',
+      mood: '疲惫 · 甩锅',
+      accent: '#ff465c',
+      accentRgb: '255, 70, 92',
+      sky: ['#01040a', '#030b16', '#071a2c', '#02060c'],
+      fog: 'rgba(70, 150, 255, 0.11)',
+      mote: '#8ecbff',
+      ground: '#050a12',
+      groundLight: 'rgba(110, 180, 255, 0.16)',
+      quotes: [
+        '如果当时不辞职',
+        '老板的臭骂',
+        '需求又改了',
+        '今晚通宵',
+        '99+ 未读',
+        '这锅你背一下',
+        '明早就要',
+        '辛苦了，再改改',
+      ],
+    },
+  ];
 
   // ============================================================
   // 配色（纯代码绘制）
@@ -144,13 +232,16 @@
     squash: 1,
     facing: 1,
     startX: 0,
+    slowTimer: 0,
+    reverseTimer: 0,
+    stunCooldown: 0,
   };
 
   const game = {
-    phase: 'running',     // running | dead
+    phase: 'intro',       // intro | running | dead | ending
     hp: MAX_HP,
     shadowAge: 0,         // 影子成形时间
-    finished: false,
+    introTimer: 0,
     shake: 0,
     hitFlash: 0,
     edgeFlash: 0,
@@ -159,7 +250,17 @@
   const keys = new Set();
   const bullets = [];
   const particles = [];
-  const bg = { far: [], mid: [], floaters: [], motes: [] };
+  const bg = { motes: [] };
+  const statics = [];
+  const dynamics = [];
+  const quotes = [];
+  const toasts = [];
+
+  let sceneIndex = 0;
+  let scene = SCENES[0];
+  let quoteTimer = 0.8;
+  let dynamicTimer = 3.2;
+  let potTimer = 6.5;
 
   // 环形队列：每个槽存放一次固定步长的玩家快照
   const shadowRing = new Array(DELAY_STEPS).fill(null);
@@ -193,7 +294,7 @@
   }
 
   function progressRatio() {
-    return clamp((player.furthestX - player.startX) / TRACK_LENGTH, 0, 1);
+    return clamp((player.furthestX - player.startX) / SCENE_LENGTH, 0, 1);
   }
 
   // ============================================================
@@ -226,86 +327,12 @@
       camera.prevX = camera.x;
     }
 
-    buildBackground();
     buildMotes();
   }
 
   // ============================================================
-  // 程序化背景（纯代码，无图片）
+  // 环境微尘
   // ============================================================
-  function buildBackground() {
-    bg.far.length = 0;
-    bg.mid.length = 0;
-    bg.floaters.length = 0;
-
-    const farSpan = TRACK_LENGTH * 0.16 + view.w * 1.7;
-    let x = -200;
-    let i = 0;
-    while (x < farSpan) {
-      const w = 110 + hash(i * 3.7) * 180;
-      const h = 120 + hash(i * 8.1) * 280;
-      bg.far.push({ x, w, h, seed: i });
-      x += w + 20 + hash(i * 5.9) * 80;
-      i++;
-    }
-
-    const midSpan = TRACK_LENGTH * 0.42 + view.w * 1.7;
-    x = -240;
-    i = 0;
-    while (x < midSpan) {
-      const w = 72 + hash(i * 2.3 + 9) * 100;
-      const h = 70 + hash(i * 6.7 + 3) * 210;
-      const b = { x, w, h, seed: i, windows: [], sign: null };
-
-      const cols = Math.max(2, Math.floor(w / 18));
-      const rows = Math.max(2, Math.floor(h / 26));
-      for (let c = 0; c < cols; c++) {
-        for (let r = 0; r < rows; r++) {
-          const n = hash(i * 91.7 + c * 13.1 + r * 7.3);
-          if (n > 0.74) {
-            b.windows.push({
-              x: 7 + c * ((w - 14) / cols),
-              y: 10 + r * ((h - 18) / rows),
-              w: 4,
-              h: 6,
-              a: 0.1 + (n - 0.74) * 0.9,
-              pink: hash(i * 17.3 + c * 3.1 + r * 5.7) > 0.78,
-              phase: n * 6.28,
-            });
-          }
-        }
-      }
-
-      if (hash(i * 1.7 + 4) > 0.7) {
-        b.sign = {
-          color: hash(i * 2.9) > 0.5 ? 'cyan' : 'pink',
-          y: h * (0.25 + hash(i * 3.3) * 0.4),
-        };
-      }
-
-      bg.mid.push(b);
-      x += w + 8 + hash(i * 4.1 + 2) * 36;
-      i++;
-    }
-
-    const floatSpan = TRACK_LENGTH * 0.32 + view.w * 1.7;
-    x = 160;
-    i = 0;
-    while (x < floatSpan) {
-      const kind = hash(i * 12.3 + 3);
-      bg.floaters.push({
-        x,
-        y: -150 - hash(i * 9.1) * 460,
-        size: 12 + hash(i * 5.5) * 22,
-        rot: (hash(i * 7.7) - 0.5) * 1.4,
-        bob: hash(i * 6.2) * Math.PI * 2,
-        type: kind > 0.7 ? 'frame' : kind > 0.42 ? 'heart' : 'shard',
-      });
-      x += 220 + hash(i * 8.8) * 380;
-      i++;
-    }
-  }
-
   function buildMotes() {
     bg.motes.length = 0;
     const count = clamp(Math.round((view.w * view.h) / 24000), 24, 110);
@@ -333,8 +360,9 @@
       return;
     }
 
-    if (e.code === 'KeyR' && game.phase === 'dead') {
-      restart();
+    if (e.code === 'KeyR' && (game.phase === 'dead' || game.phase === 'ending')) {
+      if (game.phase === 'dead') restartScene();
+      else restartGame();
       return;
     }
 
@@ -351,14 +379,28 @@
     keys.clear();
   });
 
-  elRestart.addEventListener('click', restart);
+  elRestart.addEventListener('click', restartScene);
+  elEndingRestart.addEventListener('click', restartGame);
 
   // ============================================================
-  // 重开
+  // 场景装载 / 重开
   // ============================================================
-  function restart() {
-    elDeath.classList.remove('show');
+  function restartScene() {
     elRestart.blur();
+    loadScene(sceneIndex, false);
+  }
+
+  function restartGame() {
+    elEndingRestart.blur();
+    loadScene(0, true);
+  }
+
+  function loadScene(index, showIntro) {
+    sceneIndex = clamp(index, 0, SCENES.length - 1);
+    scene = SCENES[sceneIndex];
+
+    elDeath.classList.remove('show');
+    elEnding.classList.remove('show');
 
     player.startX = camera.anchor;
     player.worldX = player.startX;
@@ -377,6 +419,9 @@
     player.crouchBlend = 0;
     player.squash = 1;
     player.facing = 1;
+    player.slowTimer = 0;
+    player.reverseTimer = 0;
+    player.stunCooldown = 0;
 
     camera.x = 0;
     camera.prevX = 0;
@@ -390,21 +435,55 @@
 
     bullets.length = 0;
     particles.length = 0;
+    statics.length = 0;
+    dynamics.length = 0;
+    quotes.length = 0;
+    toasts.length = 0;
     dustAccumulator = 0;
     elapsed = 0;
+    quoteTimer = 1.0;
+    dynamicTimer = 4.0;
+    potTimer = 8.0;
 
-    game.phase = 'running';
+    buildSceneObstacles();
+
+    game.phase = showIntro ? 'intro' : 'running';
     game.hp = MAX_HP;
     game.shadowAge = 0;
-    game.finished = false;
+    game.introTimer = showIntro ? SCENE_INTRO_TIME : 0;
     game.shake = 0;
     game.hitFlash = 0;
     game.edgeFlash = 0;
 
-    keys.clear();
     hudPercent = -1;
     updateHud();
     updateHp();
+
+    elSceneLabel.textContent = scene.act + ' · ' + scene.name;
+    elDeathScene.textContent = scene.act + ' · ' + scene.name;
+
+    if (showIntro) showSceneCard();
+    else hideSceneCard();
+  }
+
+  function showSceneCard() {
+    elSceneAct.textContent = scene.actLabel;
+    elSceneName.textContent = scene.name;
+    elSceneMood.textContent = scene.mood;
+    elSceneCard.style.setProperty('--accent', scene.accent);
+    elSceneCard.classList.add('show');
+  }
+
+  function hideSceneCard() {
+    elSceneCard.classList.remove('show');
+  }
+
+  function flashScene(color) {
+    elSceneFlash.style.background = color;
+    elSceneFlash.animate(
+      [{ opacity: 0.82 }, { opacity: 0 }],
+      { duration: 700, easing: 'ease-out' }
+    );
   }
 
   // ============================================================
@@ -413,8 +492,24 @@
   function update(dt) {
     elapsed += dt;
 
-    if (game.phase === 'dead') {
+    // ---------- 过场 / 死亡 / 结局：只维持环境动画 ----------
+    if (game.phase === 'intro') {
       updateAmbient(dt);
+      updateQuotes(dt);
+      updateToasts(dt);
+      game.introTimer -= dt;
+      if (game.introTimer <= 0) {
+        game.phase = 'running';
+        player.jumpBuffer = 0;
+        hideSceneCard();
+      }
+      return;
+    }
+
+    if (game.phase !== 'running') {
+      updateAmbient(dt);
+      updateQuotes(dt);
+      updateToasts(dt);
       return;
     }
 
@@ -422,13 +517,24 @@
     player.prevY = player.y;
     camera.prevX = camera.x;
 
+    player.slowTimer = Math.max(0, player.slowTimer - dt);
+    player.reverseTimer = Math.max(0, player.reverseTimer - dt);
+    player.stunCooldown = Math.max(0, player.stunCooldown - dt);
+
     // ---------- 水平移动 ----------
     let dir = 0;
     if (anyKeyHeld(KEY_RIGHT)) dir = 1;
     else if (anyKeyHeld(KEY_LEFT)) dir = -1;
 
+    // 聚光灯眩晕：左右操作反向
+    if (player.reverseTimer > 0) dir = -dir;
+
+    const slowed = player.slowTimer > 0;
+    const accel = slowed ? RUN_ACCEL * 0.5 : RUN_ACCEL;
+    const maxSpeed = slowed ? RUN_MAX * 0.38 : RUN_MAX;
+
     if (dir !== 0) {
-      player.vx += dir * RUN_ACCEL * dt;
+      player.vx += dir * accel * dt;
       player.facing = dir;
     } else {
       const drag = RUN_DRAG * dt;
@@ -437,10 +543,10 @@
         : player.vx - Math.sign(player.vx) * drag;
     }
 
-    player.vx = clamp(player.vx, -RUN_MAX * 0.65, RUN_MAX);
+    player.vx = clamp(player.vx, -maxSpeed * 0.7, maxSpeed);
     player.worldX += player.vx * dt;
 
-    const finishX = player.startX + TRACK_LENGTH;
+    const finishX = player.startX + SCENE_LENGTH;
     if (player.worldX < player.startX) {
       player.worldX = player.startX;
       player.vx = Math.max(0, player.vx);
@@ -500,11 +606,15 @@
 
     player.furthestX = Math.max(player.furthestX, player.worldX);
 
-    // ---------- 到达测试终点 ----------
-    if (!game.finished && player.furthestX >= finishX) {
-      game.finished = true;
-      bullets.length = 0;
+    // ---------- 抵达“释怀之门” ----------
+    if (player.worldX >= finishX - 2) {
+      completeScene();
+      return;
     }
+
+    // ---------- 场景障碍 ----------
+    updateSceneHazards(dt);
+    if (game.phase !== 'running') return;
 
     // ---------- 相机 ----------
     const camTarget = Math.max(0, player.worldX - camera.anchor);
@@ -523,7 +633,7 @@
     }
 
     // ---------- 影子开火 ----------
-    if (shadowPose && !game.finished) {
+    if (shadowPose) {
       fireTimer -= dt;
       if (fireTimer <= 0) {
         fireTimer += SHOT_INTERVAL;
@@ -533,7 +643,7 @@
 
     updateBullets(dt);
     checkHits();
-    if (game.phase === 'dead') return;
+    if (game.phase !== 'running') return;
 
     // ---------- 奔跑扬尘 ----------
     if (player.onGround && Math.abs(player.vx) > 90) {
@@ -552,6 +662,8 @@
     }
 
     updateParticles(dt);
+    updateQuotes(dt);
+    updateToasts(dt);
 
     for (const m of bg.motes) {
       m.x -= m.speed * dt;
@@ -687,7 +799,7 @@
   }
 
   function checkHits() {
-    if (game.phase !== 'running' || game.finished) return;
+    if (game.phase !== 'running') return;
 
     const pb = hitboxFor({
       worldX: player.worldX,
@@ -711,6 +823,25 @@
     }
   }
 
+  const DEATH_INFO = {
+    shadow: {
+      title: '被回忆追上了',
+      sub: '你停下的一瞬间，2 秒前的自己就贴了上来。',
+    },
+    bullet: {
+      title: '被一句话击穿了',
+      sub: '那些扎心的文字，也是从你自己的心里长出来的。',
+    },
+    pendulum: {
+      title: '时间不够了！',
+      sub: '那根巨大的指针替你数完了最后几秒，考场没有等你。',
+    },
+    pot: {
+      title: '背锅侠',
+      sub: '一口巨大的黑锅从前方滚来，而你没能躲开。',
+    },
+  };
+
   function die(cause) {
     if (game.phase !== 'running') return;
 
@@ -721,10 +852,10 @@
     keys.clear();
     sfx.hit();
 
-    elDeathTitle.textContent = cause === 'bullet' ? '被一句话击穿了' : '被回忆追上了';
-    elDeathSub.textContent = cause === 'bullet'
-      ? '那些扎心的文字，也是从你自己的心里长出来的。'
-      : '你停下的一瞬间，2 秒前的自己就贴了上来。';
+    const info = DEATH_INFO[cause] || DEATH_INFO.shadow;
+    elDeathTitle.textContent = info.title;
+    elDeathSub.textContent = info.sub;
+    elDeathScene.textContent = scene.act + ' · ' + scene.name;
     elDeathProgress.textContent = Math.floor(progressRatio() * 100) + '%';
     elDeath.classList.add('show');
 
@@ -743,6 +874,347 @@
       elPercent.textContent = pct + '%';
       elFill.style.width = pct + '%';
     }
+  }
+
+  // ============================================================
+  // 三幕障碍系统
+  // ============================================================
+  function buildSceneObstacles() {
+    statics.length = 0;
+    dynamics.length = 0;
+
+    const rnd = (n) => hash(n + sceneIndex * 101.7);
+    let x = 1400;
+    let i = 0;
+
+    while (x < SCENE_LENGTH - 1700) {
+      const roll = rnd(i * 3.7 + 1);
+
+      if (scene.key === 'exam') {
+        if (roll < 0.62) {
+          statics.push({ kind: 'paper', worldX: x, w: 60, h: 46, seed: i, hit: false });
+        } else {
+          statics.push({
+            kind: 'pendulum',
+            worldX: x,
+            phase: rnd(i * 5.1 + 2) * Math.PI * 2,
+          });
+        }
+      } else if (scene.key === 'confession') {
+        if (roll < 0.66) {
+          const count = 2 + Math.floor(rnd(i * 4.3 + 3) * 2);
+          for (let c = 0; c < count; c++) {
+            statics.push({
+              kind: 'heart',
+              worldX: x + c * 62,
+              w: 50,
+              h: 24,
+              seed: i * 7 + c,
+              hit: false,
+            });
+          }
+        } else {
+          statics.push({
+            kind: 'spotlight',
+            worldX: x,
+            phase: rnd(i * 6.7 + 4) * Math.PI * 2,
+          });
+        }
+      } else {
+        statics.push({ kind: 'coffee', worldX: x, w: 54, h: 28, seed: i, hit: false });
+        if (roll > 0.78) {
+          statics.push({ kind: 'coffee', worldX: x + 72, w: 54, h: 28, seed: i + 9, hit: false });
+        }
+      }
+
+      x += 880 + rnd(i * 8.9 + 5) * 680;
+      i++;
+    }
+  }
+
+  function playerBox() {
+    return hitboxFor({
+      worldX: player.worldX,
+      y: player.y,
+      crouchBlend: player.crouchBlend,
+    });
+  }
+
+  function updateSceneHazards(dt) {
+    const pb = playerBox();
+
+    // ---------- 静态地面障碍 / 钟摆 / 聚光灯 ----------
+    for (const o of statics) {
+      if (o.kind === 'paper' || o.kind === 'heart' || o.kind === 'coffee') {
+        if (o.hit) continue;
+        const half = o.w / 2 + 13;
+        if (Math.abs(player.worldX - o.worldX) > half) continue;
+        if (player.y > o.h) continue;
+
+        o.hit = true;
+        if (o.kind === 'paper') {
+          applySlow(0.9, '这题又错了');
+          spawnBurst(o.worldX, 18, 'white', 10, 1);
+        } else if (o.kind === 'heart') {
+          applySlow(1.0, '心碎了一地，脚步也乱了');
+          spawnBurst(o.worldX, 12, 'pink', 10, 1);
+        } else {
+          slipPlayer('今晚又要加班了');
+          spawnBurst(o.worldX, 10, 'coffee', 12, 1);
+        }
+        continue;
+      }
+
+      if (o.kind === 'pendulum') {
+        const bladeX = o.worldX + Math.sin(elapsed * 1.5 + o.phase) * 180;
+        if (Math.abs(player.worldX - bladeX) > 46) continue;
+        if (pb.top < 58 || pb.bottom > 104) continue;
+        die('pendulum');
+        return;
+      }
+
+      if (o.kind === 'spotlight') {
+        if (player.stunCooldown > 0) continue;
+        const spotX = o.worldX + Math.sin(elapsed * 0.8 + o.phase) * 135;
+        if (Math.abs(player.worldX - spotX) > 66) continue;
+        if (player.crouchBlend > 0.55) continue;
+        if (player.y > 140) continue;
+        stunPlayer();
+      }
+    }
+
+    // ---------- 动态障碍生成 ----------
+    if (player.worldX < SCENE_LENGTH - 1500) {
+      dynamicTimer -= dt;
+      if (dynamicTimer <= 0) {
+        spawnDynamic();
+        if (scene.key === 'exam') dynamicTimer = 3.0 + Math.random() * 1.2;
+        else if (scene.key === 'confession') dynamicTimer = 4.8 + Math.random() * 1.6;
+        else dynamicTimer = 3.4 + Math.random() * 1.2;
+      }
+
+      if (scene.key === 'office') {
+        potTimer -= dt;
+        if (potTimer <= 0) {
+          spawnDynamic('pot');
+          potTimer = 7.4 + Math.random() * 2.0;
+        }
+      }
+    }
+
+    // ---------- 动态障碍更新与碰撞 ----------
+    for (let i = dynamics.length - 1; i >= 0; i--) {
+      const d = dynamics[i];
+      d.worldX -= d.speed * dt;
+      d.age += dt;
+      d.spin += dt * (d.kind === 'pot' ? 6 : 2.4);
+
+      if (d.dead || d.age > 12 || d.worldX < camera.x - 420) {
+        dynamics.splice(i, 1);
+        continue;
+      }
+
+      if (d.kind === 'redX') {
+        if (d.hit) continue;
+        if (Math.abs(player.worldX - d.worldX) < 30 &&
+            pb.bottom < d.height + 22 && pb.top > d.height - 22) {
+          d.hit = true;
+          applySlow(0.75, '又错一道');
+          spawnBurst(d.worldX, d.height, 'red', 10, 1);
+        }
+      } else if (d.kind === 'hand') {
+        if (d.hit) continue;
+        if (Math.abs(player.worldX - d.worldX) < 44 &&
+            pb.bottom < d.height + 32 && pb.top > d.height - 34) {
+          d.hit = true;
+          pushBackPlayer(125, '他们在背后指指点点');
+          spawnBurst(d.worldX, d.height, 'pink', 8, 0.7);
+        }
+      } else if (d.kind === 'doc') {
+        if (d.hit) continue;
+        if (Math.abs(player.worldX - d.worldX) < 38 &&
+            pb.bottom < d.height + 32 && pb.top > d.height - 32) {
+          d.hit = true;
+          applySlow(0.7, '需求又变了');
+          pushBackPlayer(60, '');
+          spawnBurst(d.worldX, d.height, 'white', 10, 0.9);
+        }
+      } else if (d.kind === 'pot') {
+        if (Math.abs(player.worldX - d.worldX) < 50 && player.y < d.height + 20) {
+          die('pot');
+          return;
+        }
+      }
+    }
+  }
+
+  function spawnDynamic(forceKind) {
+    const x = camera.x + view.w + 160;
+    const kind = forceKind ||
+      (scene.key === 'exam' ? 'redX' :
+        scene.key === 'confession' ? 'hand' : 'doc');
+
+    if (kind === 'redX') {
+      dynamics.push({
+        kind: 'redX',
+        worldX: x,
+        height: 52 + Math.random() * 18,
+        speed: 340,
+        spin: Math.random() * Math.PI * 2,
+        age: 0,
+        hit: false,
+      });
+    } else if (kind === 'hand') {
+      dynamics.push({
+        kind: 'hand',
+        worldX: x,
+        height: 72,
+        speed: 300,
+        spin: 0,
+        age: 0,
+        hit: false,
+        phase: Math.random() * Math.PI * 2,
+      });
+    } else if (kind === 'doc') {
+      dynamics.push({
+        kind: 'doc',
+        worldX: x,
+        height: 94,
+        speed: 320,
+        spin: Math.random() * Math.PI * 2,
+        age: 0,
+        hit: false,
+      });
+    } else if (kind === 'pot') {
+      dynamics.push({
+        kind: 'pot',
+        worldX: camera.x + view.w + 220,
+        height: 40,
+        r: 40,
+        speed: 620,
+        spin: 0,
+        age: 0,
+        hit: false,
+      });
+    }
+  }
+
+  // ---------- 负面状态 ----------
+  function applySlow(seconds, text) {
+    player.slowTimer = Math.max(player.slowTimer, seconds);
+    player.vx *= 0.24;
+    player.squash = 0.82;
+    game.shake = Math.max(game.shake, 0.2);
+    addToast(text);
+  }
+
+  function slipPlayer(text) {
+    player.vx = 0;
+    player.slowTimer = Math.max(player.slowTimer, 1.2);
+    player.squash = 0.7;
+    game.shake = Math.max(game.shake, 0.38);
+    addToast(text);
+  }
+
+  function stunPlayer() {
+    player.reverseTimer = 1.8;
+    player.stunCooldown = 2.8;
+    player.vx *= 0.28;
+    game.shake = Math.max(game.shake, 0.55);
+    addToast('所有人都在看你');
+  }
+
+  function pushBackPlayer(amount, text) {
+    player.worldX = Math.max(player.startX, player.worldX - amount);
+    player.vx = Math.min(0, player.vx) * 0.3;
+    player.runPhase += 1.4;
+    game.shake = Math.max(game.shake, 0.4);
+    if (text) addToast(text);
+  }
+
+  function spawnBurst(wx, y, tint, count, power) {
+    const n = Math.max(1, Math.round(count));
+    for (let i = 0; i < n; i++) {
+      particles.push({
+        x: wx + (Math.random() - 0.5) * 24,
+        y: y + Math.random() * 10,
+        vx: (Math.random() - 0.5) * 260 * power,
+        vy: 50 + Math.random() * 220 * power,
+        life: 0.32 + Math.random() * 0.5,
+        maxLife: 0.82,
+        size: 1.4 + Math.random() * 2.6,
+        tint,
+      });
+    }
+  }
+
+  // ---------- 屏幕飘字 ----------
+  function addToast(text) {
+    const sx = clamp(player.worldX - camera.x, 100, view.w - 100);
+    toasts.push({
+      text,
+      x: sx,
+      y: world.groundY - 185,
+      life: 1.5,
+      maxLife: 1.5,
+      color: scene.accent,
+      size: 16,
+    });
+  }
+
+  function updateToasts(dt) {
+    for (let i = toasts.length - 1; i >= 0; i--) {
+      const t = toasts[i];
+      t.life -= dt;
+      t.y -= 34 * dt;
+      if (t.life <= 0) toasts.splice(i, 1);
+    }
+    if (toasts.length > 5) toasts.splice(0, toasts.length - 5);
+  }
+
+  // ---------- 场景漂浮刺痛文案 ----------
+  function updateQuotes(dt) {
+    quoteTimer -= dt;
+    if (quoteTimer <= 0) {
+      quoteTimer = 1.0 + Math.random() * 1.2;
+      quotes.push({
+        text: scene.quotes[Math.floor(Math.random() * scene.quotes.length)],
+        x: view.w + 120 + Math.random() * 160,
+        y: view.h * (0.16 + Math.random() * 0.44),
+        size: 12 + Math.random() * 6,
+        speed: 26 + Math.random() * 28,
+        phase: Math.random() * Math.PI * 2,
+        alpha: 0.13 + Math.random() * 0.2,
+      });
+    }
+
+    for (let i = quotes.length - 1; i >= 0; i--) {
+      const q = quotes[i];
+      q.x -= q.speed * dt;
+      q.y += Math.sin(elapsed * 0.9 + q.phase) * 8 * dt;
+      if (q.x < -280) quotes.splice(i, 1);
+    }
+    if (quotes.length > 18) quotes.splice(0, quotes.length - 18);
+  }
+
+  function completeScene() {
+    if (game.phase !== 'running') return;
+
+    bullets.length = 0;
+    dynamics.length = 0;
+
+    if (sceneIndex >= SCENES.length - 1) {
+      game.phase = 'ending';
+      elEnding.classList.add('show');
+      elEndingRestart.blur();
+      sfx.pickup();
+      return;
+    }
+
+    const next = SCENES[sceneIndex + 1];
+    sfx.pickup();
+    flashScene(next.accent);
+    loadScene(sceneIndex + 1, true);
   }
 
   // ============================================================
@@ -812,6 +1284,10 @@
   function render(alpha) {
     const camX = lerp(camera.prevX, camera.x, alpha);
 
+    // 清屏，避免镜头震动时露出上一帧残影
+    ctx.fillStyle = '#020205';
+    ctx.fillRect(0, 0, view.w, view.h);
+
     ctx.save();
 
     if (game.shake > 0) {
@@ -827,42 +1303,29 @@
     drawFloaters(camX);
     drawMid(camX);
     drawGround(camX);
+    drawQuotes();
     drawGoal(camX);
+    drawStatics(camX);
     drawShadow(alpha, camX);
     drawParticles(camX);
     drawSpeedStreaks(camX);
     drawPlayer(alpha, camX);
+    drawDynamics(camX);
     drawBullets(camX);
     drawEdgeWarning(camX);
 
     ctx.restore();
 
-    drawIntroHint();
+    drawToasts();
     drawDamageFlash();
-  }
-
-  // 开场提示：说明“2 秒延迟”的核心规则
-  function drawIntroHint() {
-    if (game.phase !== 'running' || game.finished || elapsed > 4.4) return;
-
-    const alpha = clamp(Math.min(elapsed / 0.6, (4.4 - elapsed) / 1.2), 0, 1);
-    ctx.save();
-    ctx.globalAlpha = alpha * 0.7;
-    ctx.fillStyle = '#cfeeff';
-    ctx.font = '600 13px "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('别停下 · 2 秒前的你正在追来', view.w / 2, view.h * 0.18);
-    ctx.restore();
   }
 
   function drawSky(camX) {
     const g = ctx.createLinearGradient(0, 0, 0, view.h);
-    g.addColorStop(0, '#030309');
-    g.addColorStop(0.42, '#0a0a1c');
-    g.addColorStop(0.7, '#151033');
-    g.addColorStop(0.78, '#1a1236');
-    g.addColorStop(1, '#05040c');
+    g.addColorStop(0, scene.sky[0]);
+    g.addColorStop(0.42, scene.sky[1]);
+    g.addColorStop(0.72, scene.sky[2]);
+    g.addColorStop(1, scene.sky[3]);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, view.w, view.h);
 
@@ -870,19 +1333,38 @@
       view.w * 0.52, world.groundY, 0,
       view.w * 0.52, world.groundY, Math.max(view.w, view.h) * 0.8
     );
-    glow.addColorStop(0, 'rgba(84, 58, 150, 0.32)');
-    glow.addColorStop(0.5, 'rgba(40, 24, 80, 0.14)');
+    glow.addColorStop(0, scene.fog);
+    glow.addColorStop(0.62, 'rgba(0, 0, 0, 0)');
     glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, view.w, view.h);
 
-    drawSkyClock(camX);
-    drawSkyHeart(camX);
+    // 场景专属的远处光
+    if (scene.key === 'confession') {
+      const beam = ctx.createRadialGradient(
+        view.w * 0.5, view.h * 0.34, 10,
+        view.w * 0.5, view.h * 0.34, view.w * 0.55
+      );
+      beam.addColorStop(0, 'rgba(255, 80, 150, 0.08)');
+      beam.addColorStop(1, 'rgba(255, 80, 150, 0)');
+      ctx.fillStyle = beam;
+      ctx.fillRect(0, 0, view.w, view.h);
+    } else if (scene.key === 'office') {
+      const monitor = ctx.createRadialGradient(
+        view.w * 0.68, world.groundY - 80, 10,
+        view.w * 0.68, world.groundY - 80, view.w * 0.5
+      );
+      monitor.addColorStop(0, 'rgba(70, 150, 255, 0.10)');
+      monitor.addColorStop(1, 'rgba(70, 150, 255, 0)');
+      ctx.fillStyle = monitor;
+      ctx.fillRect(0, 0, view.w, view.h);
+    }
 
+    // 漂浮微尘
     for (const m of bg.motes) {
       const twinkle = 0.55 + 0.45 * Math.sin(elapsed * 1.4 + m.phase);
       ctx.globalAlpha = m.alpha * twinkle;
-      ctx.fillStyle = '#9cefff';
+      ctx.fillStyle = scene.mote;
       ctx.beginPath();
       ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
       ctx.fill();
@@ -890,27 +1372,31 @@
     ctx.globalAlpha = 1;
   }
 
-  function drawSkyClock(camX) {
-    const x = view.w * 0.72 - camX * 0.09;
-    const y = world.groundY - Math.min(view.h * 0.36, 320);
-    const r = Math.min(view.w, view.h) * 0.15;
+  // 考场墙上的巨型时钟（可复用远景道具）
+  function drawWallClock(x, y, r) {
     if (x < -r * 2 || x > view.w + r * 2) return;
 
     ctx.save();
     ctx.translate(x, y);
 
-    ctx.strokeStyle = 'rgba(150, 150, 255, 0.10)';
+    ctx.fillStyle = 'rgba(9, 10, 13, 0.6)';
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(215, 225, 235, 0.14)';
     ctx.lineWidth = Math.max(1, r * 0.025);
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(150, 150, 255, 0.07)';
+    ctx.strokeStyle = 'rgba(215, 225, 235, 0.08)';
+    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.arc(0, 0, r * 0.82, 0, Math.PI * 2);
     ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(170, 190, 255, 0.16)';
+    ctx.strokeStyle = 'rgba(230, 236, 242, 0.22)';
     ctx.lineWidth = Math.max(1, r * 0.012);
     for (let i = 0; i < 12; i++) {
       const a = (i / 12) * Math.PI * 2;
@@ -920,9 +1406,8 @@
       ctx.stroke();
     }
 
-    // 外圈断开的记忆刻度
-    ctx.strokeStyle = 'rgba(150, 150, 255, 0.06)';
-    ctx.lineWidth = 1;
+    // 外圈断裂的刻度
+    ctx.strokeStyle = 'rgba(215, 225, 235, 0.06)';
     ctx.beginPath();
     ctx.arc(0, 0, r * 1.26, -1.35, 0.55);
     ctx.stroke();
@@ -930,9 +1415,9 @@
     ctx.arc(0, 0, r * 1.42, 2.2, 3.9);
     ctx.stroke();
 
-    // 表盘裂纹
-    ctx.strokeStyle = 'rgba(255, 130, 168, 0.10)';
-    ctx.lineWidth = 1;
+    // 红色批改裂纹
+    ctx.strokeStyle = 'rgba(' + scene.accentRgb + ', 0.28)';
+    ctx.lineWidth = Math.max(1, r * 0.012);
     ctx.beginPath();
     ctx.moveTo(r * 0.04, -r * 0.96);
     ctx.lineTo(-r * 0.08, -r * 0.58);
@@ -950,70 +1435,69 @@
     const minuteA = elapsed * 0.36 - Math.PI / 2;
     const secondA = Math.floor(elapsed) * (Math.PI / 30) - Math.PI / 2;
 
-    ctx.strokeStyle = 'rgba(190, 200, 255, 0.20)';
+    ctx.strokeStyle = 'rgba(225, 232, 240, 0.26)';
     ctx.lineWidth = Math.max(1.5, r * 0.03);
     ctx.beginPath();
     ctx.moveTo(0, 0);
     ctx.lineTo(Math.cos(hourA) * r * 0.45, Math.sin(hourA) * r * 0.45);
     ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(125, 249, 255, 0.22)';
+    ctx.strokeStyle = 'rgba(240, 246, 252, 0.32)';
+    ctx.lineWidth = Math.max(1, r * 0.016);
     ctx.beginPath();
     ctx.moveTo(0, 0);
     ctx.lineTo(Math.cos(minuteA) * r * 0.68, Math.sin(minuteA) * r * 0.68);
     ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(255, 100, 145, 0.20)';
-    ctx.lineWidth = Math.max(1, r * 0.014);
+    ctx.strokeStyle = 'rgba(' + scene.accentRgb + ', 0.7)';
+    ctx.lineWidth = Math.max(1, r * 0.018);
     ctx.beginPath();
     ctx.moveTo(0, 0);
     ctx.lineTo(Math.cos(secondA) * r * 0.76, Math.sin(secondA) * r * 0.76);
     ctx.stroke();
 
-    ctx.fillStyle = 'rgba(125, 249, 255, 0.3)';
+    ctx.fillStyle = 'rgba(255, 70, 92, 0.65)';
     ctx.beginPath();
-    ctx.arc(0, 0, Math.max(2, r * 0.03), 0, Math.PI * 2);
+    ctx.arc(0, 0, Math.max(2, r * 0.035), 0, Math.PI * 2);
     ctx.fill();
 
     ctx.restore();
   }
 
-  function drawSkyHeart(camX) {
-    const x = view.w * 0.18 - camX * 0.045;
-    const y = world.groundY - view.h * 0.5;
-    const s = Math.min(view.w, view.h) * 0.09;
+  // 表白现场的霓虹破碎之心
+  function drawNeonHeart(x, y, s, alpha) {
     if (x < -s * 2 || x > view.w + s * 2) return;
 
     ctx.save();
     ctx.translate(x, y);
-    ctx.rotate(-0.12);
+    ctx.rotate(-0.1);
 
-    const halo = ctx.createRadialGradient(0, 0, s * 0.2, 0, 0, s * 1.7);
-    halo.addColorStop(0, 'rgba(255, 70, 125, 0.035)');
-    halo.addColorStop(1, 'rgba(255, 70, 125, 0)');
+    const halo = ctx.createRadialGradient(0, 0, s * 0.2, 0, 0, s * 1.8);
+    halo.addColorStop(0, 'rgba(255, 70, 135, ' + (0.1 * alpha) + ')');
+    halo.addColorStop(1, 'rgba(255, 70, 135, 0)');
     ctx.fillStyle = halo;
     ctx.beginPath();
-    ctx.arc(0, 0, s * 1.7, 0, Math.PI * 2);
+    ctx.arc(0, 0, s * 1.8, 0, Math.PI * 2);
     ctx.fill();
 
+    ctx.shadowColor = 'rgba(255, 70, 135, 0.65)';
+    ctx.shadowBlur = 22;
+
     heartPath(ctx, s);
-    ctx.fillStyle = 'rgba(255, 90, 140, 0.03)';
+    ctx.fillStyle = 'rgba(255, 90, 150, ' + (0.035 * alpha) + ')';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 120, 160, 0.12)';
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(255, 120, 175, ' + (0.55 * alpha) + ')';
+    ctx.lineWidth = 2;
     ctx.stroke();
 
     crackPath(ctx, s);
-    ctx.strokeStyle = 'rgba(255, 140, 175, 0.10)';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255, 200, 220, ' + (0.5 * alpha) + ')';
+    ctx.lineWidth = 1.2;
     ctx.stroke();
 
-    // 内部几何切面
-    ctx.strokeStyle = 'rgba(255, 130, 165, 0.055)';
-    ctx.beginPath();
-    ctx.moveTo(0, -s * 0.34);
-    ctx.lineTo(0, s * 0.86);
-    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255, 130, 175, ' + (0.18 * alpha) + ')';
+    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(-s * 0.5, -s * 0.26);
     ctx.lineTo(0, s * 0.1);
@@ -1024,201 +1508,569 @@
   }
 
   function drawFar(camX) {
-    const offset = camX * 0.16;
+    if (scene.key === 'exam') drawExamFar(camX);
+    else if (scene.key === 'confession') drawConfessionFar(camX);
+    else drawOfficeFar(camX);
+  }
+
+  function drawExamFar(camX) {
     const gy = world.groundY;
 
+    // 高而窄的考场窗户
+    const winW = Math.min(view.w * 0.26, 340);
+    const span = winW + 130;
+    const off = (camX * 0.06) % span;
+    const top = gy - Math.min(view.h * 0.64, 560);
+
     ctx.save();
-    for (const b of bg.far) {
-      const x = b.x - offset;
-      if (x + b.w < -60 || x > view.w + 60) continue;
-      const top = gy - b.h;
+    for (let x = -off - span; x < view.w + span; x += span) {
+      ctx.fillStyle = 'rgba(200, 212, 224, 0.03)';
+      ctx.fillRect(x, top, winW, gy - top);
+      ctx.strokeStyle = 'rgba(200, 212, 224, 0.09)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, top, winW, gy - top);
 
-      ctx.fillStyle = '#16112c';
-      ctx.fillRect(x, top, b.w, b.h);
-
-      ctx.fillStyle = 'rgba(130, 120, 220, 0.10)';
-      ctx.fillRect(x, top, b.w, 1);
-
-      if (b.seed % 4 === 0) {
-        ctx.strokeStyle = 'rgba(130, 120, 220, 0.12)';
-        ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(200, 212, 224, 0.045)';
+      ctx.lineWidth = 1;
+      for (let k = 1; k < 4; k++) {
+        const bx = x + (winW / 4) * k;
         ctx.beginPath();
-        ctx.moveTo(x + b.w * 0.66, top);
-        ctx.lineTo(x + b.w * 0.66, top - 18);
+        ctx.moveTo(bx, top);
+        ctx.lineTo(bx, gy);
         ctx.stroke();
-
-        const blink = 0.5 + 0.5 * Math.sin(elapsed * 1.6 + b.seed);
-        ctx.fillStyle = 'rgba(255, 100, 140, ' + (0.16 + blink * 0.22) + ')';
+      }
+      for (let k = 1; k < 4; k++) {
+        const by = top + ((gy - top) / 4) * k;
         ctx.beginPath();
-        ctx.arc(x + b.w * 0.66, top - 20, 1.8, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(x, by);
+        ctx.lineTo(x + winW, by);
+        ctx.stroke();
       }
     }
     ctx.restore();
-  }
 
-  function drawFloaters(camX) {
-    const offset = camX * 0.3;
-    const gy = world.groundY;
+    // 墙上巨大的时钟
+    const clocks = [800, 2400, 4000];
+    for (const cx of clocks) {
+      drawWallClock(
+        cx - camX * 0.12,
+        gy - Math.min(view.h * 0.42, 390),
+        Math.min(view.w, view.h) * 0.17
+      );
+    }
 
-    ctx.save();
-    for (const f of bg.floaters) {
-      const x = f.x - offset;
-      if (x < -80 || x > view.w + 80) continue;
+    // 扭曲的数学公式
+    const formulas = ['∫ 后悔 dt', 'x² − 1 = ?', 'P(重来) = 0', 'sin θ = ?', 'Σ 错题', 'lim 时间→0'];
+    for (let i = 0; i < 24; i++) {
+      const x = 260 + i * 360 - camX * 0.22;
+      if (x < -260 || x > view.w + 260) continue;
 
-      const y = gy + f.y + Math.sin(elapsed * 0.7 + f.bob) * 10;
-      const pulse = 0.55 + 0.25 * Math.sin(elapsed * 1.1 + f.bob);
+      const y = gy - 100 - hash(i * 3.3 + 7) * view.h * 0.48;
+      const size = 13 + hash(i * 5.1) * 12;
 
       ctx.save();
       ctx.translate(x, y);
-      ctx.rotate(f.rot + Math.sin(elapsed * 0.5 + f.bob) * 0.08);
+      ctx.rotate((hash(i * 7.7) - 0.5) * 0.4);
+      ctx.globalAlpha = 0.07 + hash(i * 2.7) * 0.09;
+      ctx.fillStyle = '#e0e7ee';
+      ctx.font = '500 ' + size + 'px Consolas, "Courier New", monospace';
+      ctx.fillText(formulas[i % formulas.length], 0, 0);
 
-      if (f.type === 'heart') {
-        heartPath(ctx, f.size);
-        ctx.fillStyle = 'rgba(255, 92, 138, ' + (0.05 * pulse) + ')';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(255, 130, 165, ' + (0.24 * pulse) + ')';
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = 'rgba(255, 57, 79, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, size * 0.9);
+      ctx.lineTo(60 + hash(i * 9.9) * 90, size * 0.9);
+      ctx.stroke();
+      ctx.restore();
+    }
 
-        crackPath(ctx, f.size);
-        ctx.strokeStyle = 'rgba(255, 150, 180, ' + (0.18 * pulse) + ')';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      } else if (f.type === 'frame') {
-        const w = f.size * 0.95;
-        const h = f.size * 1.3;
+    // 刺眼的红色批改记号
+    for (let i = 0; i < 8; i++) {
+      const x = 500 + i * 1100 - camX * 0.18;
+      if (x < -80 || x > view.w + 80) continue;
 
-        ctx.fillStyle = 'rgba(120, 220, 255, 0.02)';
-        ctx.fillRect(-w / 2, -h / 2, w, h);
-        ctx.strokeStyle = 'rgba(150, 225, 255, ' + (0.16 * pulse) + ')';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(-w / 2, -h / 2, w, h);
+      const y = gy - 130 - hash(i * 6.1) * view.h * 0.4;
+      const s = 12 + hash(i * 4.4) * 20;
 
-        // 扫描线
-        ctx.strokeStyle = 'rgba(150, 225, 255, ' + (0.055 * pulse) + ')';
-        for (let k = 1; k <= 2; k++) {
-          ctx.beginPath();
-          ctx.moveTo(-w / 2 + 3, -h / 2 + (k * h) / 3);
-          ctx.lineTo(w / 2 - 3, -h / 2 + (k * h) / 3);
-          ctx.stroke();
-        }
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate((hash(i * 8.8) - 0.5) * 0.5);
+      ctx.strokeStyle = 'rgba(' + scene.accentRgb + ', 0.22)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-s, -s);
+      ctx.lineTo(s, s);
+      ctx.moveTo(s, -s);
+      ctx.lineTo(-s, s);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
 
-        // 相框裂痕
-        ctx.strokeStyle = 'rgba(255, 130, 165, ' + (0.2 * pulse) + ')';
+  function drawConfessionFar(camX) {
+    const gy = world.groundY;
+
+    // 远方霓虹光斑
+    for (let i = 0; i < 26; i++) {
+      const x = i * 260 + 140 - camX * 0.12;
+      if (x < -80 || x > view.w + 80) continue;
+
+      const y = gy - 160 - hash(i * 4.6) * view.h * 0.55;
+      const r = 1 + hash(i * 7.1) * 2.6;
+
+      ctx.globalAlpha = 0.18 + hash(i * 2.2) * 0.3;
+      ctx.fillStyle = hash(i * 3.9) > 0.35 ? '#ff6fa4' : '#8fd4ff';
+      ctx.beginPath();
+      ctx.arc(x + Math.sin(elapsed * 0.5 + i) * 8, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // 巨型霓虹心
+    const hearts = [900, 2800, 4700];
+    for (let i = 0; i < hearts.length; i++) {
+      const x = hearts[i] - camX * 0.15;
+      const y = gy - 200 - hash(i * 3.3) * 100;
+      const s = Math.min(view.w, view.h) * (0.07 + hash(i * 4.4) * 0.04);
+      drawNeonHeart(x, y, s, 0.55 + 0.15 * Math.sin(elapsed * 1.2 + i));
+    }
+
+    // 舞台顶部的粉色帘线
+    const off = (camX * 0.07) % 180;
+    ctx.strokeStyle = 'rgba(255, 90, 150, 0.08)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 22);
+    ctx.lineTo(view.w, 22);
+    ctx.stroke();
+    for (let x = -off; x < view.w + 180; x += 180) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.quadraticCurveTo(x + 90, 40, x + 180, 0);
+      ctx.stroke();
+    }
+  }
+
+  function drawOfficeFar(camX) {
+    const gy = world.groundY;
+
+    // 落地窗与城市灯火
+    const win = 340;
+    const off = (camX * 0.05) % win;
+    ctx.save();
+    for (let x = -off - win; x < view.w + win; x += win) {
+      const top = gy - Math.min(view.h * 0.6, 500);
+      ctx.fillStyle = 'rgba(10, 26, 44, 0.35)';
+      ctx.fillRect(x, top, win - 14, gy - top - 10);
+      ctx.strokeStyle = 'rgba(95, 165, 235, 0.10)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, top, win - 14, gy - top - 10);
+
+      ctx.fillStyle = 'rgba(120, 190, 255, 0.10)';
+      for (let k = 0; k < 14; k++) {
+        const px = x + 20 + hash(k * 3.1 + x * 0.01) * (win - 50);
+        const py = gy - 80 - hash(k * 5.7 + x * 0.02) * (view.h * 0.3);
+        ctx.fillRect(px, py, 2, 2);
+      }
+    }
+    ctx.restore();
+
+    // 深夜数字时钟
+    const clocks = [
+      { x: 1800, text: '01:47' },
+      { x: 3700, text: '03:12' },
+    ];
+    for (const c of clocks) {
+      const x = c.x - camX * 0.1;
+      if (x < -200 || x > view.w + 200) continue;
+
+      ctx.save();
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = '#7fd4ff';
+      ctx.font = '600 46px Consolas, "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.shadowColor = 'rgba(90, 190, 255, 0.8)';
+      ctx.shadowBlur = 20;
+      ctx.fillText(c.text, x, gy - view.h * 0.36);
+      ctx.restore();
+    }
+
+    // 巨型“99+”消息气泡
+    const bubbles = [500, 2200, 3900, 5400];
+    for (let i = 0; i < bubbles.length; i++) {
+      drawChatBubble(
+        bubbles[i] - camX * 0.22,
+        gy - 260 - hash(i * 3.7) * 150,
+        0.9 + hash(i * 6.2) * 0.5,
+        0.5
+      );
+    }
+  }
+
+  function roundRectPath(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  function drawChatBubble(x, y, scale, alpha) {
+    if (x < -200 || x > view.w + 200) return;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+
+    const w = 132;
+    const h = 76;
+
+    ctx.fillStyle = 'rgba(7, 16, 28, ' + (0.55 * alpha) + ')';
+    ctx.strokeStyle = 'rgba(105, 195, 255, ' + (0.35 * alpha) + ')';
+    ctx.lineWidth = 2;
+    roundRectPath(ctx, -w / 2, -h / 2, w, h, 16);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(-18, h / 2 - 2);
+    ctx.lineTo(-6, h / 2 + 18);
+    ctx.lineTo(8, h / 2 - 2);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(7, 16, 28, ' + (0.55 * alpha) + ')';
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(140, 215, 255, ' + (0.8 * alpha) + ')';
+    ctx.font = '700 30px Consolas, "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(90, 190, 255, 0.8)';
+    ctx.shadowBlur = 14;
+    ctx.fillText('99+', 0, 2);
+    ctx.restore();
+    ctx.shadowBlur = 0;
+  }
+
+  function drawFloaters(camX) {
+    if (scene.key === 'exam') drawExamFloat(camX);
+    else if (scene.key === 'confession') drawPetalRain(camX);
+    else drawOfficeFloat(camX);
+  }
+
+  function drawExamFloat(camX) {
+    const gy = world.groundY;
+    const off = camX * 0.32;
+
+    for (let i = 0; i < 26; i++) {
+      const x = i * 430 + 120 - off;
+      if (x < -120 || x > view.w + 120) continue;
+
+      const y = gy - 120 - hash(i * 4.4) * view.h * 0.5
+        + Math.sin(elapsed * 0.7 + i) * 14;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.sin(elapsed * 0.4 + i) * 0.18 + (hash(i * 2.2) - 0.5) * 0.3);
+
+      const w = 30 + hash(i * 8.1) * 26;
+      const h = w * 1.3;
+
+      ctx.fillStyle = 'rgba(230, 236, 242, 0.05)';
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+      ctx.strokeStyle = 'rgba(220, 230, 240, 0.12)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-w / 2, -h / 2, w, h);
+
+      ctx.strokeStyle = 'rgba(220, 230, 240, 0.09)';
+      for (let k = 1; k < 4; k++) {
         ctx.beginPath();
-        ctx.moveTo(-w / 2 + 3, -h / 2 + 2);
-        ctx.lineTo(w * 0.1, h * 0.05);
-        ctx.lineTo(-w * 0.06, h * 0.4);
-        ctx.lineTo(w / 2 - 3, h / 2 - 3);
+        ctx.moveTo(-w / 2 + 4, -h / 2 + (k * h) / 4);
+        ctx.lineTo(w / 2 - 4, -h / 2 + (k * h) / 4);
         ctx.stroke();
-      } else {
-        const s = f.size * 0.62;
+      }
+
+      if (i % 4 === 0) {
+        ctx.strokeStyle = 'rgba(255, 57, 79, 0.22)';
+        ctx.lineWidth = 1.6;
+        const s = 6;
         ctx.beginPath();
-        ctx.moveTo(0, -s);
-        ctx.lineTo(s * 0.55, 0);
-        ctx.lineTo(0, s);
-        ctx.lineTo(-s * 0.55, 0);
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(110, 240, 255, ' + (0.035 * pulse) + ')';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(140, 245, 255, ' + (0.18 * pulse) + ')';
-        ctx.lineWidth = 1;
+        ctx.moveTo(-s, -s);
+        ctx.lineTo(s, s);
+        ctx.moveTo(s, -s);
+        ctx.lineTo(-s, s);
         ctx.stroke();
       }
 
       ctx.restore();
     }
-    ctx.restore();
+  }
+
+  function drawPetalRain(camX) {
+    const wrapW = view.w + 80;
+    const wrapH = view.h + 60;
+
+    for (let i = 0; i < 38; i++) {
+      const speed = 26 + hash(i * 3.1) * 40;
+      const x = ((hash(i * 7.7) * view.w - elapsed * speed * 0.35 + camX * 0.06) % wrapW + wrapW) % wrapW - 40;
+      const y = ((elapsed * speed + hash(i * 8.8) * view.h) % wrapH) - 30;
+      const size = 2 + hash(i * 4.4) * 2.4;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(elapsed * 0.8 + i);
+      ctx.globalAlpha = 0.22 + hash(i * 2.2) * 0.3;
+      ctx.fillStyle = i % 5 === 0 ? '#ffd1e1' : '#ff7aa8';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, size * 1.8, size * 0.7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawOfficeFloat(camX) {
+    const gy = world.groundY;
+    const off = camX * 0.28;
+
+    for (let i = 0; i < 22; i++) {
+      const x = i * 480 + 200 - off;
+      if (x < -100 || x > view.w + 100) continue;
+
+      const y = gy - 160 - hash(i * 5.1) * view.h * 0.45
+        + Math.sin(elapsed * 0.6 + i) * 8;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate((hash(i * 6.6) - 0.5) * 0.3 + Math.sin(elapsed * 0.5 + i) * 0.1);
+
+      ctx.fillStyle = 'rgba(160, 205, 235, 0.045)';
+      ctx.fillRect(-18, -24, 36, 48);
+      ctx.strokeStyle = 'rgba(160, 205, 235, 0.12)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-18, -24, 36, 48);
+      ctx.strokeStyle = 'rgba(160, 205, 235, 0.08)';
+      for (let k = 1; k < 4; k++) {
+        ctx.beginPath();
+        ctx.moveTo(-13, -24 + k * 10);
+        ctx.lineTo(13, -24 + k * 10);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    // 远处漂浮的小气泡
+    for (let i = 0; i < 3; i++) {
+      drawChatBubble(
+        i * 1400 + 600 - camX * 0.38,
+        gy - 320 - hash(i * 9.1) * 120,
+        0.28,
+        0.35
+      );
+    }
   }
 
   function drawMid(camX) {
-    const offset = camX * 0.42;
+    if (scene.key === 'exam') drawExamMid(camX);
+    else if (scene.key === 'confession') drawConfessionMid(camX);
+    else drawOfficeMid(camX);
+  }
+
+  // 高考考场：一排排课桌与考生的黑色剪影
+  function drawExamMid(camX) {
     const gy = world.groundY;
+    const spacing = 240;
+    const parallax = camX * 0.45;
+    const off = parallax % spacing;
+    const baseIdx = Math.floor(parallax / spacing);
 
-    ctx.save();
-    for (const b of bg.mid) {
-      const x = b.x - offset;
-      if (x + b.w < -40 || x > view.w + 40) continue;
-      const top = gy - b.h;
+    for (let k = -1; k <= Math.ceil(view.w / spacing) + 1; k++) {
+      const x = k * spacing - off;
+      const idx = baseIdx + k;
+      const wobble = hash(idx * 4.7);
 
-      ctx.fillStyle = '#0c0919';
-      ctx.fillRect(x, top, b.w, b.h);
+      const top = gy - 78 - wobble * 6;
 
-      ctx.fillStyle = 'rgba(110, 230, 255, 0.10)';
-      ctx.fillRect(x, top, b.w, 1.5);
+      // 坐在课桌后的考生剪影
+      ctx.fillStyle = 'rgba(4, 5, 7, 0.82)';
+      ctx.beginPath();
+      ctx.moveTo(x + 50, gy);
+      ctx.lineTo(x + 56, top - 26);
+      ctx.quadraticCurveTo(x + 78, top - 40, x + 100, top - 26);
+      ctx.lineTo(x + 106, gy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x + 78, top - 48, 12 + wobble * 3, 0, Math.PI * 2);
+      ctx.fill();
 
-      for (const w of b.windows) {
-        const flicker = 0.85 + 0.15 * Math.sin(elapsed * 1.7 + w.phase);
-        ctx.fillStyle = w.pink
-          ? 'rgba(255, 100, 150, ' + clamp(w.a * flicker, 0, 0.5) + ')'
-          : 'rgba(120, 235, 255, ' + clamp(w.a * flicker, 0, 0.5) + ')';
-        ctx.fillRect(x + w.x, top + w.y, w.w, w.h);
-      }
+      // 课桌
+      ctx.fillStyle = 'rgba(7, 8, 11, 0.9)';
+      ctx.fillRect(x + 12, top, 132, 8);
+      ctx.fillRect(x + 24, top + 8, 5, 52);
+      ctx.fillRect(x + 126, top + 8, 5, 52);
 
-      // 楼顶天线与闪烁航标
-      if (b.seed % 3 === 0) {
-        const ax = x + b.w * (0.22 + hash(b.seed * 3.1) * 0.5);
-        const ah = 14 + hash(b.seed * 5.7) * 22;
-        ctx.strokeStyle = 'rgba(120, 210, 255, 0.12)';
+      // 桌子上的答题卡
+      ctx.fillStyle = 'rgba(225, 232, 238, 0.06)';
+      ctx.fillRect(x + 40, top - 3, 52, 3);
+      if (idx % 4 === 0) {
+        ctx.strokeStyle = 'rgba(255, 57, 79, 0.22)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(ax, top);
-        ctx.lineTo(ax, top - ah);
+        ctx.moveTo(x + 48, top - 4);
+        ctx.lineTo(x + 58, top - 7);
+        ctx.moveTo(x + 58, top - 4);
+        ctx.lineTo(x + 48, top - 7);
         ctx.stroke();
+      }
 
-        const blink = 0.5 + 0.5 * Math.sin(elapsed * 2 + b.seed);
-        ctx.fillStyle = 'rgba(255, 100, 140, ' + (0.2 + blink * 0.35) + ')';
+      // 椅背
+      ctx.fillStyle = 'rgba(4, 5, 8, 0.7)';
+      ctx.fillRect(x + 68, top + 14, 22, 3);
+    }
+  }
+
+  // 表白现场：围观人群的黑色剪影
+  function drawConfessionMid(camX) {
+    const gy = world.groundY;
+    const spacing = 74;
+    const parallax = camX * 0.55;
+    const off = parallax % spacing;
+    const baseIdx = Math.floor(parallax / spacing);
+
+    ctx.save();
+    for (let k = -1; k <= Math.ceil(view.w / spacing) + 1; k++) {
+      const x = k * spacing - off;
+      const idx = baseIdx + k;
+      const h = 46 + hash(idx * 3.7) * 34;
+      const headR = 10 + hash(idx * 5.3) * 4;
+      const bob = Math.sin(elapsed * 1.1 + idx * 0.7) * 2;
+
+      const headY = gy - h + bob;
+
+      ctx.fillStyle = 'rgba(4, 1, 6, 0.9)';
+      ctx.beginPath();
+      ctx.moveTo(x - 26, gy + 22);
+      ctx.lineTo(x - 17, headY + headR + 8);
+      ctx.quadraticCurveTo(x, headY + headR - 8, x + 17, headY + headR + 8);
+      ctx.lineTo(x + 26, gy + 22);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(x, headY, headR, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 零星举起的手
+      if (idx % 5 === 0) {
+        ctx.strokeStyle = 'rgba(5, 2, 7, 0.85)';
+        ctx.lineWidth = 5;
+        ctx.lineCap = 'round';
         ctx.beginPath();
-        ctx.arc(ax, top - ah, 1.5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(x + 16, headY + headR + 14);
+        ctx.lineTo(x + 26, headY - 18);
+        ctx.stroke();
       }
 
-      // 楼顶水箱剪影
-      if (b.seed % 4 === 1) {
-        ctx.fillStyle = '#0a0816';
-        ctx.fillRect(x + b.w * 0.15, top - 9, b.w * 0.26, 9);
-        ctx.strokeStyle = 'rgba(110, 230, 255, 0.08)';
-        ctx.strokeRect(x + b.w * 0.15, top - 9, b.w * 0.26, 9);
+      // 手机屏幕的冷光
+      if (idx % 7 === 0) {
+        ctx.fillStyle = 'rgba(130, 220, 255, 0.5)';
+        ctx.fillRect(x + headR - 1, headY + 4, 4, 7);
       }
 
-      if (b.sign) {
-        const rgb = b.sign.color === 'cyan' ? '125, 249, 255' : '255, 92, 138';
-        const sx = x + b.w - 8;
-        const sy = top + b.sign.y;
-        ctx.fillStyle = 'rgba(' + rgb + ', 0.08)';
-        ctx.fillRect(sx - 2, sy, 5, b.h * 0.28);
-        ctx.fillStyle = 'rgba(' + rgb + ', 0.3)';
-        ctx.fillRect(sx, sy + 2, 1, b.h * 0.28 - 4);
-      }
+      // 轮廓的粉色边光
+      ctx.strokeStyle = 'rgba(255, 79, 139, 0.10)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, headY, headR + 0.5, -Math.PI * 0.8, Math.PI * 0.2);
+      ctx.stroke();
     }
     ctx.restore();
+  }
+
+  // 深夜职场：格子间隔断与显示器冷光
+  function drawOfficeMid(camX) {
+    const gy = world.groundY;
+    const spacing = 300;
+    const parallax = camX * 0.42;
+    const off = parallax % spacing;
+    const baseIdx = Math.floor(parallax / spacing);
+
+    for (let k = -1; k <= Math.ceil(view.w / spacing) + 1; k++) {
+      const x = k * spacing - off;
+      const idx = baseIdx + k;
+      const panelH = 104 + hash(idx * 4.1) * 36;
+
+      // 隔断面板
+      ctx.fillStyle = 'rgba(10, 18, 28, 0.9)';
+      ctx.fillRect(x, gy - panelH, 244, panelH);
+      ctx.fillStyle = 'rgba(90, 160, 220, 0.08)';
+      ctx.fillRect(x, gy - panelH, 244, 2);
+      ctx.strokeStyle = 'rgba(90, 160, 220, 0.05)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, gy - panelH + 0.5, 243, panelH - 1);
+
+      // 显示器与蓝光
+      const mx = x + 52 + hash(idx * 6.3) * 90;
+      const my = gy - panelH + 24;
+      const flicker = 0.8 + 0.2 * Math.sin(elapsed * 2.3 + idx);
+
+      ctx.fillStyle = 'rgba(50, 120, 210, ' + (0.10 * flicker) + ')';
+      ctx.fillRect(mx - 8, my - 8, 72, 52);
+      ctx.fillStyle = 'rgba(140, 210, 255, ' + (0.5 * flicker) + ')';
+      ctx.fillRect(mx, my, 56, 36);
+      ctx.fillStyle = 'rgba(4, 10, 18, 0.9)';
+      ctx.fillRect(mx + 30, my + 36, 4, 10);
+      ctx.fillRect(mx + 18, my + 46, 28, 3);
+
+      // 桌上的文件
+      ctx.fillStyle = 'rgba(200, 220, 240, 0.06)';
+      ctx.fillRect(x + 152, gy - 48, 56, 4);
+      ctx.fillRect(x + 160, gy - 42, 40, 3);
+    }
+
+    // 顶部日光灯
+    const lightOff = (camX * 0.2) % 420;
+    for (let x = -lightOff; x < view.w + 420; x += 420) {
+      const flicker = 0.6 + 0.4 * Math.sin(elapsed * 9 + x * 0.01);
+      ctx.fillStyle = 'rgba(180, 225, 255, ' + (0.05 * flicker) + ')';
+      ctx.fillRect(x + 60, 24, 170, 5);
+      ctx.fillStyle = 'rgba(180, 225, 255, ' + (0.03 * flicker) + ')';
+      ctx.fillRect(x + 40, 29, 210, 20);
+    }
   }
 
   function drawGround(camX) {
     const gy = world.groundY;
 
     const g = ctx.createLinearGradient(0, gy, 0, view.h);
-    g.addColorStop(0, '#0d0a1d');
-    g.addColorStop(0.2, '#070511');
-    g.addColorStop(1, '#030208');
+    g.addColorStop(0, scene.ground);
+    g.addColorStop(0.35, '#05040a');
+    g.addColorStop(1, '#020205');
     ctx.fillStyle = g;
     ctx.fillRect(0, gy, view.w, view.h - gy);
 
+    // 地面边缘光
     ctx.save();
-    ctx.shadowColor = 'rgba(125, 249, 255, 0.55)';
-    ctx.shadowBlur = 14;
-    const lineG = ctx.createLinearGradient(0, 0, view.w, 0);
-    lineG.addColorStop(0, 'rgba(125, 249, 255, 0.05)');
-    lineG.addColorStop(0.5, 'rgba(155, 250, 255, 0.6)');
-    lineG.addColorStop(1, 'rgba(125, 249, 255, 0.05)');
-    ctx.fillStyle = lineG;
+    ctx.shadowColor = scene.groundLight;
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = scene.groundLight;
+    ctx.globalAlpha = 0.8;
     ctx.fillRect(0, gy - 1, view.w, 2);
     ctx.restore();
 
-    const spacing = 110;
+    // 纵向滚动刻度
+    const spacing = scene.key === 'office' ? 86 : 110;
     const off = camX % spacing;
-    ctx.strokeStyle = 'rgba(125, 249, 255, 0.05)';
+    ctx.strokeStyle = scene.key === 'exam'
+      ? 'rgba(220, 228, 238, 0.05)'
+      : scene.key === 'confession'
+        ? 'rgba(255, 130, 170, 0.06)'
+        : 'rgba(100, 170, 255, 0.06)';
     ctx.lineWidth = 1;
     for (let x = -off; x < view.w + spacing; x += spacing) {
       ctx.beginPath();
@@ -1227,8 +2079,13 @@
       ctx.stroke();
     }
 
+    // 车道虚线
     ctx.save();
-    ctx.strokeStyle = 'rgba(160, 240, 255, 0.16)';
+    ctx.strokeStyle = scene.key === 'exam'
+      ? 'rgba(225, 232, 240, 0.13)'
+      : scene.key === 'confession'
+        ? 'rgba(255, 115, 165, 0.17)'
+        : 'rgba(110, 180, 255, 0.13)';
     ctx.lineWidth = 2;
     const dashGap = 140;
     const dashOff = (camX * 1.35) % dashGap;
@@ -1240,8 +2097,11 @@
     }
     ctx.restore();
 
-    ctx.strokeStyle = 'rgba(160, 240, 255, 0.06)';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = scene.key === 'exam'
+      ? 'rgba(220, 230, 240, 0.05)'
+      : scene.key === 'confession'
+        ? 'rgba(255, 120, 165, 0.06)'
+        : 'rgba(110, 180, 255, 0.05)';
     const off2 = (camX * 0.7) % 220;
     for (let x = -off2; x < view.w + 220; x += 220) {
       ctx.beginPath();
@@ -1249,38 +2109,648 @@
       ctx.lineTo(x + 80, gy + 8);
       ctx.stroke();
     }
+
+    // ---------- 场景地面细节 ----------
+    if (scene.key === 'exam') {
+      // 散落的草稿纸
+      const paperGap = 430;
+      const pOff = camX % paperGap;
+      const baseIdx = Math.floor(camX / paperGap);
+      for (let k = -1; k <= Math.ceil(view.w / paperGap) + 1; k++) {
+        const x = k * paperGap - pOff + 90;
+        const idx = baseIdx + k;
+        const y = gy + 54 + hash(idx * 3.1) * (view.h - gy - 90);
+
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate((hash(idx * 4.7) - 0.5) * 0.5);
+        ctx.fillStyle = 'rgba(230, 236, 242, 0.07)';
+        ctx.fillRect(-20, -13, 40, 26);
+        ctx.strokeStyle = 'rgba(220, 230, 238, 0.10)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(-20, -13, 40, 26);
+        if (idx % 3 === 0) {
+          ctx.strokeStyle = 'rgba(255, 57, 79, 0.25)';
+          ctx.beginPath();
+          ctx.moveTo(-7, -7);
+          ctx.lineTo(7, 7);
+          ctx.moveTo(7, -7);
+          ctx.lineTo(-7, 7);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // 地砖接缝
+      ctx.strokeStyle = 'rgba(210, 222, 232, 0.04)';
+      for (let y = gy + 74; y < view.h; y += 76) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(view.w, y);
+        ctx.stroke();
+      }
+    } else if (scene.key === 'confession') {
+      // 舞台地板的霓虹反光
+      ctx.save();
+      ctx.shadowColor = 'rgba(255, 79, 139, 0.5)';
+      ctx.shadowBlur = 12;
+      ctx.strokeStyle = 'rgba(255, 79, 139, 0.14)';
+      ctx.lineWidth = 1.5;
+      const gap = 260;
+      const o = (camX * 1.15) % gap;
+      for (let x = -o; x < view.w + gap; x += gap) {
+        ctx.beginPath();
+        ctx.moveTo(x, gy + 96);
+        ctx.lineTo(x + 120, gy + 96);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // 地上的花瓣与碎光
+      const petalOff = (camX * 1.2) % 300;
+      for (let k = 0; k < Math.ceil(view.w / 300) + 2; k++) {
+        const x = k * 300 - petalOff + 60;
+        const idx = Math.floor(camX * 1.2 / 300) + k;
+        const y = gy + 52 + hash(idx * 5.1) * (view.h - gy - 80);
+        ctx.globalAlpha = 0.25 + hash(idx * 3.3) * 0.3;
+        ctx.fillStyle = idx % 4 === 0 ? '#ffd1e1' : '#ff6f9f';
+        ctx.beginPath();
+        ctx.ellipse(x, y, 4, 1.6, hash(idx * 7.7) * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    } else {
+      // 办公室地毯格线
+      ctx.strokeStyle = 'rgba(90, 160, 235, 0.045)';
+      for (let y = gy + 60; y < view.h; y += 66) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(view.w, y);
+        ctx.stroke();
+      }
+
+      // 咖啡渍
+      const stainGap = 520;
+      const sOff = camX % stainGap;
+      for (let k = -1; k <= Math.ceil(view.w / stainGap) + 1; k++) {
+        const x = k * stainGap - sOff + 150;
+        const idx = Math.floor(camX / stainGap) + k;
+        const y = gy + 80 + hash(idx * 4.9) * (view.h - gy - 110);
+        ctx.fillStyle = 'rgba(120, 80, 50, 0.10)';
+        ctx.beginPath();
+        ctx.ellipse(x, y, 28 + hash(idx * 3.2) * 20, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
+  // 每幕终点：释怀之门
   function drawGoal(camX) {
-    const gx = player.startX + TRACK_LENGTH - camX;
-    if (gx < -120 || gx > view.w + 200) return;
+    const gx = player.startX + SCENE_LENGTH - camX;
+    if (gx < -240 || gx > view.w + 280) return;
 
     const gy = world.groundY;
-    const pulse = 0.65 + 0.35 * Math.sin(elapsed * 2.2);
+    const pulse = 0.65 + 0.35 * Math.sin(elapsed * 2);
+    const rgb = scene.accentRgb;
 
     ctx.save();
 
-    const beam = ctx.createLinearGradient(0, gy - 220, 0, gy);
-    beam.addColorStop(0, 'rgba(125, 249, 255, 0)');
-    beam.addColorStop(0.65, 'rgba(125, 249, 255, ' + (0.05 * pulse) + ')');
-    beam.addColorStop(1, 'rgba(160, 252, 255, ' + (0.22 * pulse) + ')');
-    ctx.fillStyle = beam;
-    ctx.fillRect(gx - 26, gy - 220, 52, 220);
+    const halo = ctx.createRadialGradient(gx, gy - 110, 10, gx, gy - 110, 280);
+    halo.addColorStop(0, 'rgba(' + rgb + ', ' + (0.2 * pulse) + ')');
+    halo.addColorStop(1, 'rgba(' + rgb + ', 0)');
+    ctx.fillStyle = halo;
+    ctx.fillRect(gx - 280, gy - 390, 560, 400);
 
-    ctx.strokeStyle = 'rgba(170, 252, 255, ' + (0.45 + 0.3 * pulse) + ')';
-    ctx.lineWidth = 2;
-    ctx.shadowColor = 'rgba(125, 249, 255, 0.9)';
-    ctx.shadowBlur = 18;
+    // 门内的光
+    const door = ctx.createLinearGradient(0, gy - 220, 0, gy);
+    door.addColorStop(0, 'rgba(255, 250, 240, 0.9)');
+    door.addColorStop(0.55, 'rgba(' + rgb + ', 0.5)');
+    door.addColorStop(1, 'rgba(255, 255, 255, 0.12)');
+    ctx.fillStyle = door;
+    ctx.fillRect(gx - 46, gy - 220, 92, 220);
+
+    // 门框
+    ctx.strokeStyle = 'rgba(' + rgb + ', 0.85)';
+    ctx.lineWidth = 3;
+    ctx.shadowColor = scene.accent;
+    ctx.shadowBlur = 24;
     ctx.beginPath();
-    ctx.moveTo(gx, gy);
-    ctx.lineTo(gx, gy - 190);
+    ctx.moveTo(gx - 58, gy);
+    ctx.lineTo(gx - 58, gy - 180);
+    ctx.quadraticCurveTo(gx, gy - 285, gx + 58, gy - 180);
+    ctx.lineTo(gx + 58, gy);
     ctx.stroke();
 
-    ctx.translate(gx, gy - 200);
-    ctx.rotate(Math.PI / 4);
-    ctx.strokeRect(-5, -5, 10, 10);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(gx - 68, gy);
+    ctx.lineTo(gx + 68, gy);
+    ctx.stroke();
+
+    // 上升的光点
+    for (let i = 0; i < 8; i++) {
+      const t = (elapsed * 0.35 + i * 0.125) % 1;
+      const px = gx + Math.sin(elapsed + i * 2.1) * 44;
+      const py = gy - t * 250;
+      ctx.globalAlpha = (1 - t) * 0.55;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(px, py, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+    ctx.font = '500 11px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('释 怀 之 门', gx, gy - 310);
 
     ctx.restore();
+  }
+
+  // ============================================================
+  // 障碍绘制
+  // ============================================================
+  function drawStatics(camX) {
+    for (const o of statics) {
+      const x = o.worldX - camX;
+      if (x < -260 || x > view.w + 260) continue;
+
+      if (o.kind === 'paper') drawPaperStack(x, o);
+      else if (o.kind === 'heart') drawGlassHeart(x, o);
+      else if (o.kind === 'coffee') drawCoffeeCup(x, o);
+      else if (o.kind === 'pendulum') drawPendulum(x, o);
+      else if (o.kind === 'spotlight') drawSpotlight(x, o);
+    }
+  }
+
+  // 试卷堆：白色方块 + 红色 X
+  function drawPaperStack(x, o) {
+    const gy = world.groundY;
+
+    ctx.save();
+    for (let i = 0; i < 6; i++) {
+      const w = 58 - i * 4;
+      const jitter = (hash(o.seed * 3.3 + i) - 0.5) * 10;
+      ctx.fillStyle = i % 2
+        ? 'rgba(212, 218, 224, 0.9)'
+        : 'rgba(242, 246, 250, 0.96)';
+      ctx.fillRect(x - w / 2 + jitter, gy - (i + 1) * 8, w, 7);
+    }
+
+    ctx.strokeStyle = 'rgba(255, 45, 66, 0.92)';
+    ctx.lineWidth = 3.2;
+    ctx.shadowColor = 'rgba(255, 45, 66, 0.5)';
+    ctx.shadowBlur = 8;
+    const top = gy - 46;
+    ctx.beginPath();
+    ctx.moveTo(x - 15, top + 4);
+    ctx.lineTo(x + 15, top + 34);
+    ctx.moveTo(x + 15, top + 4);
+    ctx.lineTo(x - 15, top + 34);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // 边缘散落的纸
+    ctx.fillStyle = 'rgba(235, 240, 245, 0.3)';
+    ctx.fillRect(x - 46, gy - 4, 22, 3);
+    ctx.fillRect(x + 20, gy - 7, 18, 3);
+    ctx.restore();
+  }
+
+  // 碎玻璃心
+  function drawGlassHeart(x, o) {
+    const gy = world.groundY;
+
+    ctx.save();
+    ctx.translate(x, gy - 12);
+    ctx.scale(1, 0.5);
+    ctx.rotate((hash(o.seed * 2.7) - 0.5) * 0.5);
+
+    ctx.shadowColor = 'rgba(210, 20, 55, 0.65)';
+    ctx.shadowBlur = 14;
+
+    heartPath(ctx, 24);
+    ctx.fillStyle = 'rgba(70, 5, 16, 0.7)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 92, 120, 0.7)';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    crackPath(ctx, 24);
+    ctx.strokeStyle = 'rgba(255, 170, 190, 0.75)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // 玻璃碎片
+    ctx.fillStyle = 'rgba(255, 120, 145, 0.35)';
+    for (let i = 0; i < 3; i++) {
+      const a = hash(o.seed * 5.1 + i) * Math.PI * 2;
+      const r = 22 + hash(o.seed * 3.9 + i) * 12;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+      ctx.lineTo(Math.cos(a) * r + 3, Math.sin(a) * r + 7);
+      ctx.lineTo(Math.cos(a) * r - 2, Math.sin(a) * r + 6);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // 咖啡杯与四溅的水渍
+  function drawCoffeeCup(x, o) {
+    const gy = world.groundY;
+    const flip = o.seed % 2 === 0 ? 1 : -1;
+
+    ctx.save();
+    ctx.translate(x, gy);
+
+    // 水渍
+    ctx.fillStyle = 'rgba(92, 58, 38, 0.24)';
+    ctx.beginPath();
+    ctx.ellipse(-14 * flip, -3, 30, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(120, 78, 50, 0.16)';
+    ctx.beginPath();
+    ctx.ellipse(-30 * flip, -2, 12, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 杯身
+    ctx.fillStyle = 'rgba(72, 43, 28, 0.95)';
+    ctx.beginPath();
+    ctx.moveTo(-12, -30);
+    ctx.lineTo(12, -30);
+    ctx.lineTo(9, -2);
+    ctx.lineTo(-9, -2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(190, 130, 90, 0.4)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    // 杯口
+    ctx.fillStyle = 'rgba(46, 27, 17, 0.98)';
+    ctx.beginPath();
+    ctx.ellipse(0, -30, 12, 3.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 杯柄
+    ctx.strokeStyle = 'rgba(72, 43, 28, 0.9)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(15 * flip, -19, 7, -Math.PI * 0.5, Math.PI * 0.5);
+    ctx.stroke();
+
+    // 飞溅的咖啡
+    ctx.fillStyle = 'rgba(110, 70, 44, 0.35)';
+    ctx.beginPath();
+    ctx.arc(-26 * flip, -20, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(-34 * flip, -10, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // 倒计时钟摆
+  function drawPendulum(x, o) {
+    const gy = world.groundY;
+    const pivotY = gy - 280;
+    const swing = Math.sin(elapsed * 1.5 + o.phase);
+    const bx = x + swing * 180;
+    const by = gy - 80 - Math.abs(swing) * 16;
+
+    ctx.save();
+
+    // 吊线
+    ctx.strokeStyle = 'rgba(3, 3, 5, 0.92)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, pivotY);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+
+    // 黑色大指针 / 扇形叶片
+    ctx.translate(bx, by);
+    ctx.rotate(swing * 0.18);
+
+    ctx.shadowColor = 'rgba(255, 57, 79, 0.5)';
+    ctx.shadowBlur = 16;
+
+    ctx.fillStyle = 'rgba(10, 10, 12, 0.96)';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 62, 19, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 向下的大指针尖
+    ctx.beginPath();
+    ctx.moveTo(-26, 2);
+    ctx.lineTo(0, 20);
+    ctx.lineTo(26, 2);
+    ctx.closePath();
+    ctx.fill();
+
+    // 指针边缘的红色刻度
+    ctx.strokeStyle = 'rgba(' + scene.accentRgb + ', 0.8)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 62, 19, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-26, 2);
+    ctx.lineTo(0, 20);
+    ctx.lineTo(26, 2);
+    ctx.stroke();
+
+    // 中央轴
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(255, 57, 79, 0.75)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // 刺眼的聚光灯
+  function drawSpotlight(x, o) {
+    const gy = world.groundY;
+    const spotX = x + Math.sin(elapsed * 0.8 + o.phase) * 135;
+    const pulse = 0.7 + 0.3 * Math.sin(elapsed * 3 + o.phase);
+
+    ctx.save();
+
+    const cone = ctx.createLinearGradient(0, 0, 0, gy);
+    cone.addColorStop(0, 'rgba(255, 246, 200, ' + (0.04 * pulse) + ')');
+    cone.addColorStop(0.6, 'rgba(255, 240, 185, ' + (0.11 * pulse) + ')');
+    cone.addColorStop(1, 'rgba(255, 235, 170, ' + (0.24 * pulse) + ')');
+    ctx.fillStyle = cone;
+    ctx.beginPath();
+    ctx.moveTo(spotX - 22, -20);
+    ctx.lineTo(spotX + 24, -20);
+    ctx.lineTo(spotX + 78, gy);
+    ctx.lineTo(spotX - 78, gy);
+    ctx.closePath();
+    ctx.fill();
+
+    // 光柱核心
+    ctx.strokeStyle = 'rgba(255, 255, 230, ' + (0.12 * pulse) + ')';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(spotX - 4, 0);
+    ctx.lineTo(spotX - 10, gy);
+    ctx.stroke();
+
+    // 地面光圈
+    const groundLight = ctx.createRadialGradient(spotX, gy, 0, spotX, gy, 92);
+    groundLight.addColorStop(0, 'rgba(255, 245, 195, ' + (0.34 * pulse) + ')');
+    groundLight.addColorStop(1, 'rgba(255, 230, 150, 0)');
+    ctx.fillStyle = groundLight;
+    ctx.beginPath();
+    ctx.ellipse(spotX, gy + 2, 92, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 光柱里的尘埃
+    for (let i = 0; i < 5; i++) {
+      const t = (elapsed * 0.3 + i * 0.2) % 1;
+      const px = spotX - 20 + t * 40 + Math.sin(elapsed + i) * 8;
+      const py = gy - t * (gy - 40);
+      ctx.globalAlpha = 0.18 * (1 - t);
+      ctx.fillStyle = '#fff8d8';
+      ctx.fillRect(px, py, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+  }
+
+  function drawDynamics(camX) {
+    for (const d of dynamics) {
+      const x = d.worldX - camX;
+      if (x < -140 || x > view.w + 140) continue;
+
+      if (d.kind === 'redX') drawRedX(x, d);
+      else if (d.kind === 'hand') drawHand(x, d);
+      else if (d.kind === 'doc') drawFlyingDocs(x, d);
+      else if (d.kind === 'pot') drawRollingPot(x, d);
+    }
+  }
+
+  function drawRedX(x, d) {
+    const y = world.groundY - d.height;
+    const s = 22 + Math.sin(d.spin) * 2;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(d.spin * 0.25);
+    ctx.shadowColor = 'rgba(255, 36, 64, 0.9)';
+    ctx.shadowBlur = 16;
+    ctx.strokeStyle = 'rgba(255, 42, 66, 0.95)';
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-s, -s);
+    ctx.lineTo(s, s);
+    ctx.moveTo(s, -s);
+    ctx.lineTo(-s, s);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  function drawHand(x, d) {
+    const y = world.groundY - d.height;
+    const waggle = Math.sin(elapsed * 4 + d.phase) * 0.16;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(waggle);
+
+    ctx.shadowColor = 'rgba(255, 120, 155, 0.5)';
+    ctx.shadowBlur = 12;
+    ctx.strokeStyle = 'rgba(255, 198, 212, 0.8)';
+    ctx.fillStyle = 'rgba(30, 8, 16, 0.85)';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+
+    // 前臂
+    ctx.beginPath();
+    ctx.moveTo(58, 6);
+    ctx.lineTo(20, 0);
+    ctx.stroke();
+
+    // 手掌
+    ctx.beginPath();
+    ctx.ellipse(2, 6, 22, 19, -0.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // 指向左边的手指
+    ctx.beginPath();
+    ctx.moveTo(-12, 0);
+    ctx.quadraticCurveTo(-38, -2, -52, -10);
+    ctx.stroke();
+
+    // 其余手指
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-12, 8 + i * 6);
+      ctx.quadraticCurveTo(-26, 10 + i * 7, -30, 16 + i * 6);
+      ctx.stroke();
+    }
+
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  function drawFlyingDocs(x, d) {
+    const y = world.groundY - d.height;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(d.spin);
+    ctx.shadowColor = 'rgba(200, 225, 255, 0.35)';
+    ctx.shadowBlur = 10;
+
+    for (let i = 0; i < 3; i++) {
+      ctx.save();
+      ctx.translate(i * 4 - 4, i * 3 - 3);
+      ctx.rotate(i * 0.06);
+
+      ctx.fillStyle = 'rgba(240, 245, 250, ' + (0.92 - i * 0.12) + ')';
+      ctx.fillRect(-25, -19, 50, 38);
+      ctx.strokeStyle = 'rgba(120, 150, 175, 0.45)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-25, -19, 50, 38);
+
+      ctx.strokeStyle = 'rgba(90, 120, 145, 0.45)';
+      for (let k = 0; k < 4; k++) {
+        ctx.beginPath();
+        ctx.moveTo(-18, -12 + k * 8);
+        ctx.lineTo(18 - (k % 2) * 9, -12 + k * 8);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  function drawRollingPot(x, d) {
+    const gy = world.groundY;
+    const r = d.r || 40;
+
+    ctx.save();
+    ctx.translate(x, gy - r);
+    ctx.rotate(-d.spin);
+
+    ctx.shadowColor = 'rgba(255, 40, 60, 0.55)';
+    ctx.shadowBlur = 18;
+
+    // 半圆形的黑锅
+    ctx.fillStyle = 'rgba(6, 7, 9, 0.98)';
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI);
+    ctx.closePath();
+    ctx.fill();
+
+    // 锅沿
+    ctx.strokeStyle = 'rgba(130, 135, 145, 0.6)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(-r, 0);
+    ctx.lineTo(r, 0);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255, 60, 80, 0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 2, 0, Math.PI);
+    ctx.stroke();
+
+    // 锅内的暗红反光
+    ctx.strokeStyle = 'rgba(255, 60, 80, 0.28)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 4, r * 0.62, 0.3, Math.PI - 0.3);
+    ctx.stroke();
+
+    // 锅柄
+    ctx.fillStyle = 'rgba(10, 11, 14, 1)';
+    ctx.fillRect(r - 2, -7, 30, 13);
+    ctx.strokeStyle = 'rgba(130, 135, 145, 0.4)';
+    ctx.strokeRect(r - 2, -7, 30, 13);
+
+    // 滚动速度线
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255, 60, 80, 0.25)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-r - 24, 4);
+    ctx.lineTo(-r - 10, 4);
+    ctx.moveTo(-r - 30, 18);
+    ctx.lineTo(-r - 14, 18);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // 场景漂浮刺痛文案
+  function drawQuotes() {
+    ctx.save();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+
+    for (const q of quotes) {
+      ctx.globalAlpha = q.alpha;
+      ctx.fillStyle = scene.key === 'exam' ? '#e2e8ee' : scene.accent;
+      ctx.font = '500 ' + q.size + 'px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillText(q.text, q.x, q.y);
+
+      if (scene.key === 'exam') {
+        const w = ctx.measureText(q.text).width;
+        ctx.globalAlpha = q.alpha * 0.85;
+        ctx.strokeStyle = 'rgba(255, 57, 79, 0.8)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(q.x, q.y + q.size * 0.7);
+        ctx.lineTo(q.x + w, q.y + q.size * 0.7);
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  // 屏幕飘字
+  function drawToasts() {
+    if (!toasts.length) return;
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+
+    for (const t of toasts) {
+      const alpha = clamp(t.life / t.maxLife, 0, 1);
+      ctx.globalAlpha = alpha;
+      ctx.font = '700 ' + t.size + 'px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.lineWidth = 3;
+      ctx.strokeText(t.text, t.x, t.y);
+      ctx.fillStyle = t.color;
+      ctx.shadowColor = t.color;
+      ctx.shadowBlur = 16;
+      ctx.fillText(t.text, t.x, t.y);
+    }
+
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
   }
 
   // ============================================================
@@ -1323,7 +2793,7 @@
   }
 
   function drawShadow(alpha, camX) {
-    if (!shadowPose || game.finished) return;
+    if (!shadowPose || game.phase === 'ending') return;
 
     const from = shadowPrevPose || shadowPose;
     const pose = lerpPose(from, shadowPose, alpha);
@@ -1823,7 +3293,7 @@
   // 屏幕边缘危险提示 / 受击闪光
   // ============================================================
   function drawEdgeWarning(camX) {
-    if (game.phase === 'dead' || game.finished) return;
+    if (game.phase !== 'running') return;
 
     let alpha = 0;
     let showChevron = false;
@@ -1886,10 +3356,18 @@
   // 粒子 / 速度线
   // ============================================================
   function drawParticles(camX) {
+    const tintColors = {
+      pink: '#ff8fb0',
+      white: '#e8eef5',
+      red: '#ff4d5e',
+      coffee: '#8a5136',
+      gold: '#ffe08a',
+    };
+
     ctx.save();
     for (const p of particles) {
       ctx.globalAlpha = clamp(p.life / p.maxLife, 0, 1) * 0.85;
-      ctx.fillStyle = p.tint === 'pink' ? '#ff8fb0' : '#a9f4ff';
+      ctx.fillStyle = tintColors[p.tint] || '#a9f4ff';
       ctx.fillRect(
         p.x - camX - p.size / 2,
         world.groundY - p.y - p.size / 2,
@@ -1909,7 +3387,11 @@
     const count = Math.ceil(view.w / spacing) + 3;
 
     ctx.save();
-    ctx.strokeStyle = '#bff7ff';
+    ctx.strokeStyle = scene.key === 'exam'
+      ? '#e6edf3'
+      : scene.key === 'confession'
+        ? '#ffb3cd'
+        : '#9ecfff';
     ctx.lineWidth = 1;
     for (let k = 0; k < count; k++) {
       const idx = first + k;
@@ -1956,6 +3438,6 @@
   window.addEventListener('resize', resize);
 
   resize();
-  updateHp();
+  loadScene(0, true);
   requestAnimationFrame(frame);
 })();

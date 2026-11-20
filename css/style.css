@@ -336,6 +336,181 @@ body {
   color: rgba(255, 180, 194, 0.7);
 }
 
+.death-scene {
+  margin-top: 18px;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 11px;
+  letter-spacing: 0.26em;
+  color: rgba(255, 150, 170, 0.5);
+}
+
+/* ---------- 场景过场 ---------- */
+#sceneCard {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    radial-gradient(ellipse at 50% 46%, rgba(10, 12, 20, 0.08), rgba(3, 4, 8, 0.7));
+  transition: opacity 0.55s ease;
+}
+
+#sceneCard.show {
+  opacity: 1;
+}
+
+.scene-card-content {
+  padding: 0 28px;
+  text-align: center;
+  transform: translateY(18px) scale(0.985);
+  transition: transform 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#sceneCard.show .scene-card-content {
+  transform: translateY(0) scale(1);
+}
+
+.scene-card-act {
+  padding-left: 0.5em;
+  margin-bottom: 20px;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 11px;
+  letter-spacing: 0.5em;
+  color: rgba(235, 245, 255, 0.42);
+}
+
+#sceneName {
+  padding-left: 0.14em;
+  font-size: clamp(36px, 6vw, 72px);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: #ffffff;
+  text-shadow: 0 0 42px var(--accent, rgba(255, 255, 255, 0.4));
+}
+
+.scene-card-rule {
+  width: 58px;
+  height: 1px;
+  margin: 22px auto 18px;
+  background: var(--accent, #ffffff);
+  box-shadow: 0 0 16px var(--accent, #ffffff);
+}
+
+#sceneMood {
+  padding-left: 0.32em;
+  font-size: 13px;
+  letter-spacing: 0.32em;
+  color: rgba(240, 246, 255, 0.62);
+}
+
+.scene-card-tip {
+  margin-top: 36px;
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  color: rgba(200, 225, 245, 0.32);
+}
+
+#sceneFlash {
+  position: fixed;
+  inset: 0;
+  z-index: 23;
+  background: #ffffff;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---------- 暂存结局（第 7 步替换为结算） ---------- */
+#ending {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(ellipse at 50% 44%, rgba(10, 24, 34, 0.4), rgba(2, 4, 9, 0.94) 72%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.8s ease;
+}
+
+#ending.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ending-card {
+  width: min(560px, 100%);
+  padding: 44px 34px 38px;
+  text-align: center;
+  border-top: 1px solid rgba(125, 249, 255, 0.28);
+  border-bottom: 1px solid rgba(125, 249, 255, 0.12);
+  background: linear-gradient(180deg, rgba(8, 22, 30, 0.55), rgba(3, 8, 12, 0.18));
+}
+
+.ending-eyebrow {
+  margin-bottom: 20px;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 10px;
+  letter-spacing: 0.46em;
+  color: rgba(125, 249, 255, 0.45);
+}
+
+.ending-card h2 {
+  font-size: clamp(26px, 3.6vw, 40px);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: #f2feff;
+  text-shadow: 0 0 30px rgba(125, 249, 255, 0.25);
+}
+
+.ending-card p {
+  margin-top: 16px;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  color: rgba(190, 228, 240, 0.6);
+}
+
+#endingRestart {
+  appearance: none;
+  margin-top: 32px;
+  padding: 12px 34px;
+  border: 1px solid rgba(125, 249, 255, 0.45);
+  background: rgba(125, 249, 255, 0.06);
+  color: #d9fbff;
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0.22em;
+  cursor: pointer;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+#endingRestart:hover {
+  background: rgba(125, 249, 255, 0.14);
+  box-shadow: 0 0 30px rgba(125, 249, 255, 0.18);
+}
+
+.ending-tip {
+  margin-top: 18px;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: rgba(150, 210, 230, 0.4);
+}
+
+.ending-tip kbd {
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  border: 1px solid rgba(125, 249, 255, 0.24);
+  border-radius: 3px;
+  background: rgba(8, 18, 30, 0.55);
+  color: rgba(196, 242, 255, 0.8);
+}
+
 @media (max-width: 640px) {
   #hud {
     top: 20px;

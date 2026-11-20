@@ -13,7 +13,7 @@
   <div id="audioState">AUDIO · STANDBY</div>
 
   <div id="hud">
-    <div class="hud-eyebrow">第一空间 · 心灵空间</div>
+    <div class="hud-eyebrow" id="sceneLabel">第一幕 · 高考考场</div>
     <div class="hud-progress">逃亡进度：<span id="progressValue">0%</span></div>
     <div class="hud-bar"><i id="progressFill"></i></div>
     <div class="hud-life">
@@ -35,12 +35,34 @@
       <div class="death-eyebrow">MEMORY CAUGHT UP</div>
       <h1 id="deathTitle">被回忆追上了</h1>
       <p id="deathSub">你停下的一瞬间，2 秒前的自己就贴了上来。</p>
+      <div class="death-scene" id="deathScene">第一幕 · 高考考场</div>
       <div class="death-stats">
         <span>逃亡进度</span>
         <b id="deathProgress">0%</b>
       </div>
-      <button id="restartBtn" type="button">再跑一次</button>
-      <div class="death-hint">按 <kbd>R</kbd> 重新开始</div>
+      <button id="restartBtn" type="button">重跑本幕</button>
+      <div class="death-hint">按 <kbd>R</kbd> 重跑本幕</div>
+    </div>
+  </div>
+
+  <div id="sceneCard">
+    <div class="scene-card-content">
+      <div class="scene-card-act" id="sceneAct">第一幕 / 共三幕</div>
+      <h2 id="sceneName">高考考场</h2>
+      <div class="scene-card-rule"></div>
+      <p id="sceneMood">焦虑 · 时间压迫</p>
+      <div class="scene-card-tip">别停下 · 2 秒前的你正在追来</div>
+    </div>
+  </div>
+  <div id="sceneFlash"></div>
+
+  <div id="ending">
+    <div class="ending-card">
+      <div class="ending-eyebrow">THE LAST DOOR</div>
+      <h2>你穿过了最后一道门</h2>
+      <p>所有回声，暂时安静了。</p>
+      <button id="endingRestart" type="button">重新经历</button>
+      <div class="ending-tip">按 <kbd>R</kbd> 重新经历</div>
     </div>
   </div>
 
