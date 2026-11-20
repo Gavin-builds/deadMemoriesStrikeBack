@@ -1,0 +1,333 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #030208;
+}
+
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  color: #dff9ff;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#game {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* 电影感暗角，纯 CSS，不依赖任何图片 */
+#vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  background:
+    repeating-linear-gradient(0deg, rgba(150, 220, 255, 0.016) 0 1px, rgba(0, 0, 0, 0) 1px 3px),
+    radial-gradient(ellipse at 50% 52%, rgba(0, 0, 0, 0) 38%, rgba(0, 0, 0, 0.52) 100%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.24), rgba(0, 0, 0, 0) 18%, rgba(0, 0, 0, 0) 82%, rgba(0, 0, 0, 0.34));
+}
+
+/* ---------- HUD ---------- */
+#hud {
+  position: fixed;
+  top: 28px;
+  left: 32px;
+  z-index: 10;
+  pointer-events: none;
+  padding-left: 16px;
+  border-left: 1px solid rgba(125, 249, 255, 0.4);
+}
+
+#hud::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 0;
+  width: 1px;
+  height: 16px;
+  background: #7df9ff;
+  box-shadow: 0 0 10px rgba(125, 249, 255, 0.9);
+}
+
+.hud-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.38em;
+  color: rgba(150, 220, 245, 0.5);
+  margin-bottom: 8px;
+  white-space: nowrap;
+}
+
+.hud-progress {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  color: rgba(219, 244, 255, 0.88);
+  white-space: nowrap;
+}
+
+#progressValue {
+  font-family: Consolas, "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #7df9ff;
+  text-shadow: 0 0 18px rgba(125, 249, 255, 0.55);
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-bar {
+  position: relative;
+  width: 210px;
+  height: 3px;
+  margin-top: 10px;
+  background: rgba(125, 249, 255, 0.12);
+  overflow: hidden;
+}
+
+#progressFill {
+  display: block;
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(43, 143, 255, 0.9), #7df9ff);
+  box-shadow: 0 0 12px rgba(125, 249, 255, 0.8);
+  transition: width 0.16s linear;
+}
+
+.hud-life {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 12px;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: rgba(210, 238, 255, 0.55);
+  white-space: nowrap;
+}
+
+.life-pip {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+  background: #ff5470;
+  box-shadow: 0 0 10px rgba(255, 84, 112, 0.85);
+  transform: rotate(45deg);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+.life-pip.lost {
+  background: rgba(255, 84, 112, 0.14);
+  box-shadow: none;
+}
+
+.life-text b {
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #ff9aae;
+  margin-left: 2px;
+}
+
+/* ---------- 操作提示 ---------- */
+#hint {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 10;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 22px;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: rgba(170, 218, 240, 0.5);
+  pointer-events: none;
+  opacity: 0.9;
+  animation: hintFade 1.2s ease 6s forwards;
+  white-space: nowrap;
+}
+
+#hint span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#hint kbd,
+.death-hint kbd {
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  border: 1px solid rgba(125, 249, 255, 0.22);
+  border-radius: 3px;
+  background: rgba(8, 18, 30, 0.55);
+  color: rgba(196, 242, 255, 0.8);
+  box-shadow: inset 0 0 12px rgba(125, 249, 255, 0.06);
+}
+
+#tech {
+  position: fixed;
+  right: 22px;
+  bottom: 20px;
+  z-index: 10;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: rgba(150, 220, 245, 0.26);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+@keyframes hintFade {
+  to {
+    opacity: 0.2;
+  }
+}
+
+/* ---------- 死亡结算 ---------- */
+#death {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(ellipse at 50% 42%, rgba(40, 3, 14, 0.4), rgba(3, 1, 5, 0.92) 72%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+}
+
+#death.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.death-card {
+  position: relative;
+  width: min(520px, 100%);
+  padding: 42px 44px 34px;
+  text-align: center;
+  border-top: 1px solid rgba(255, 84, 112, 0.4);
+  border-bottom: 1px solid rgba(255, 84, 112, 0.15);
+  background: linear-gradient(180deg, rgba(28, 4, 12, 0.6), rgba(8, 2, 6, 0.18));
+  transform: translateY(16px);
+  transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#death.show .death-card {
+  transform: translateY(0);
+}
+
+.death-eyebrow {
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 10px;
+  letter-spacing: 0.46em;
+  color: rgba(255, 110, 135, 0.55);
+  margin-bottom: 20px;
+}
+
+#deathTitle {
+  font-size: clamp(30px, 4.4vw, 50px);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #ffe9ee;
+  text-shadow: 0 0 34px rgba(255, 60, 90, 0.42);
+  margin-bottom: 16px;
+}
+
+#deathSub {
+  font-size: 13px;
+  line-height: 1.9;
+  letter-spacing: 0.08em;
+  color: rgba(230, 195, 205, 0.6);
+}
+
+.death-stats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 26px auto 30px;
+  padding: 8px 18px;
+  border: 1px solid rgba(255, 84, 112, 0.18);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: rgba(230, 195, 205, 0.55);
+}
+
+.death-stats b {
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 20px;
+  font-weight: 700;
+  color: #ff8ba0;
+}
+
+#restartBtn {
+  appearance: none;
+  display: block;
+  margin: 0 auto;
+  border: 1px solid rgba(255, 84, 112, 0.55);
+  background: rgba(255, 84, 112, 0.08);
+  color: #ffd7df;
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0.24em;
+  padding: 13px 36px;
+  cursor: pointer;
+  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+#restartBtn:hover {
+  background: rgba(255, 84, 112, 0.18);
+  box-shadow: 0 0 30px rgba(255, 60, 90, 0.25);
+  transform: translateY(-1px);
+}
+
+#restartBtn:active {
+  transform: translateY(0);
+}
+
+.death-hint {
+  margin-top: 18px;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: rgba(255, 140, 160, 0.4);
+}
+
+.death-hint kbd {
+  border-color: rgba(255, 110, 135, 0.24);
+  color: rgba(255, 180, 194, 0.7);
+}
+
+@media (max-width: 640px) {
+  #hud {
+    top: 20px;
+    left: 20px;
+  }
+
+  #hint {
+    gap: 12px;
+    font-size: 10px;
+  }
+
+  #tech {
+    display: none;
+  }
+
+  .death-card {
+    padding: 32px 24px 26px;
+  }
+}
