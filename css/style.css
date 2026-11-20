@@ -191,6 +191,30 @@ body {
   white-space: nowrap;
 }
 
+#audioState {
+  position: fixed;
+  top: 30px;
+  right: 32px;
+  z-index: 10;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  color: rgba(150, 220, 245, 0.28);
+  pointer-events: none;
+  white-space: nowrap;
+  transition: color 0.3s ease;
+}
+
+#audioState.ready {
+  color: rgba(125, 249, 255, 0.5);
+  text-shadow: 0 0 12px rgba(125, 249, 255, 0.25);
+}
+
+#audioState.muted {
+  color: rgba(255, 120, 145, 0.45);
+  text-shadow: none;
+}
+
 @keyframes hintFade {
   to {
     opacity: 0.2;
@@ -316,6 +340,12 @@ body {
   #hud {
     top: 20px;
     left: 20px;
+  }
+
+  #audioState {
+    top: 20px;
+    right: 20px;
+    font-size: 9px;
   }
 
   #hint {

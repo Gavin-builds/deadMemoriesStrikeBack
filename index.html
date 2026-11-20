@@ -10,6 +10,8 @@
   <canvas id="game"></canvas>
   <div id="vignette"></div>
 
+  <div id="audioState">AUDIO · STANDBY</div>
+
   <div id="hud">
     <div class="hud-eyebrow">第一空间 · 心灵空间</div>
     <div class="hud-progress">逃亡进度：<span id="progressValue">0%</span></div>
@@ -24,6 +26,7 @@
     <span><kbd>←</kbd><kbd>→</kbd> 移动</span>
     <span><kbd>空格</kbd> / <kbd>↑</kbd> 跳跃</span>
     <span><kbd>↓</kbd> / <kbd>S</kbd> 下蹲</span>
+    <span><kbd>M</kbd> 静音</span>
   </div>
   <div id="tech">RING BUFFER 120 · FIXED 60Hz · PURE CANVAS</div>
 
@@ -41,6 +44,7 @@
     </div>
   </div>
 
+  <script src="js/audio.js"></script>
   <script src="js/game.js"></script>
 </body>
 </html>

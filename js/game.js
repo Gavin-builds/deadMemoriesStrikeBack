@@ -16,6 +16,15 @@
   const elDeathProgress = document.getElementById('deathProgress');
   const elRestart = document.getElementById('restartBtn');
 
+  // Web Audio：全部音效由 OscillatorNode 实时合成（见 js/audio.js）
+  const sfx = window.GameAudio || {
+    jump() {},
+    hit() {},
+    pickup() {},
+    toggleMuted() {},
+    isMuted() { return false; },
+  };
+
   // ============================================================
   // 常量
   // ============================================================
@@ -317,6 +326,12 @@
   // ============================================================
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+    if (e.repeat) return;
+
+    if (e.code === 'KeyM') {
+      sfx.toggleMuted();
+      return;
+    }
 
     if (e.code === 'KeyR' && game.phase === 'dead') {
       restart();
@@ -447,6 +462,7 @@
       player.coyote = 0;
       player.squash = 1.18;
       spawnDust(player.worldX, 2, 6, 0.55);
+      sfx.jump();
     }
 
     const gravityScale = player.vy > 0 && !anyKeyHeld(KEY_JUMP) ? 1.9 : 1;
@@ -703,6 +719,7 @@
     game.shake = 0.7;
     game.hitFlash = 0.75;
     keys.clear();
+    sfx.hit();
 
     elDeathTitle.textContent = cause === 'bullet' ? '被一句话击穿了' : '被回忆追上了';
     elDeathSub.textContent = cause === 'bullet'
