@@ -24,6 +24,8 @@
   const elSceneFlash = document.getElementById('sceneFlash');
   const elEnding = document.getElementById('ending');
   const elEndingRestart = document.getElementById('endingRestart');
+  const elEndingDamage = document.getElementById('endingDamage');
+  const elEndingDamageNote = document.getElementById('endingDamageNote');
   const elBuff = document.getElementById('buffState');
 
   // Web Audio：全部音效由 OscillatorNode 实时合成（见 js/audio.js）
@@ -298,6 +300,9 @@
   let potTimer = 6.5;
   let buffHudText = '';
 
+  // 整局统计（跨场景重试累计；完整重开时清零）
+  const runStats = { damage: 0 };
+
   // 环形队列：容量覆盖 4 秒延迟，正常读取 2 秒前，失忆时读取 4 秒前
   const shadowRing = new Array(RING_CAPACITY).fill(null);
   let shadowWrite = 0;
@@ -429,6 +434,11 @@
 
   function restartGame() {
     elEndingRestart.blur();
+    startNewRun();
+  }
+
+  function startNewRun() {
+    runStats.damage = 0;
     loadScene(0, true);
   }
 
@@ -908,6 +918,7 @@
     if (game.phase !== 'running') return;
     if (player.invincibleTimer > 0) return;
 
+    runStats.damage += 1;
     game.phase = 'dead';
     game.hp = 0;
     game.shake = 0.7;
@@ -964,7 +975,7 @@
           });
         }
       } else if (scene.key === 'confession') {
-        if (roll < 0.66) {
+        if (roll < 0.72) {
           const count = 2 + Math.floor(rnd(i * 4.3 + 3) * 2);
           for (let c = 0; c < count; c++) {
             statics.push({
@@ -1163,7 +1174,7 @@
 
       if (o.kind === 'spotlight') {
         if (player.stunCooldown > 0) continue;
-        const spotX = o.worldX + Math.sin(elapsed * 0.8 + o.phase) * 135;
+        const spotX = o.worldX + Math.sin(elapsed * 0.66 + o.phase) * 135;
         if (Math.abs(player.worldX - spotX) > 66) continue;
         if (player.crouchBlend > 0.55) continue;
         if (player.y > 140) continue;
@@ -1399,6 +1410,16 @@
 
     if (sceneIndex >= SCENES.length - 1) {
       game.phase = 'ending';
+
+      if (elEndingDamage) {
+        elEndingDamage.textContent = String(runStats.damage);
+      }
+      if (elEndingDamageNote) {
+        elEndingDamageNote.textContent = runStats.damage === 0
+          ? '你一次也没有被过去击中。'
+          : '这是你被过去击中的次数。';
+      }
+
       elEnding.classList.add('show');
       elEndingRestart.blur();
       sfx.pickup();
@@ -2674,8 +2695,8 @@
   // 刺眼的聚光灯
   function drawSpotlight(x, o) {
     const gy = world.groundY;
-    const spotX = x + Math.sin(elapsed * 0.8 + o.phase) * 135;
-    const pulse = 0.7 + 0.3 * Math.sin(elapsed * 3 + o.phase);
+    const spotX = x + Math.sin(elapsed * 0.66 + o.phase) * 135;
+    const pulse = 0.7 + 0.3 * Math.sin(elapsed * 2.3 + o.phase);
 
     ctx.save();
 
@@ -3861,6 +3882,6 @@
   window.addEventListener('resize', resize);
 
   resize();
-  loadScene(0, true);
+  startNewRun();
   requestAnimationFrame(frame);
 })();
